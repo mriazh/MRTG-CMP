@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from mrtg_poncab.notifier import (
+from mrtg_cmp.notifier import (
     SCENARIO_DEBIAN_NET_DOWN,
     SCENARIO_MIKROTIK_OFFLINE,
     SCENARIO_ROUTEROS_API_DOWN,
@@ -164,7 +164,7 @@ def test_format_resolved_alert_isp_outage() -> None:
 
 def test_send_whatsapp_message_disabled_by_default() -> None:
     """send_whatsapp_message returns False when wa_alert_enabled is False and no override."""
-    with patch("mrtg_poncab.config.settings.wa_alert_enabled", False):
+    with patch("mrtg_cmp.config.settings.wa_alert_enabled", False):
         assert send_whatsapp_message("test", target_jid=None) is False
 
 
@@ -174,9 +174,9 @@ def test_send_whatsapp_message_success_mocked() -> None:
     mock_resp.status_code = 200
 
     with (
-        patch("mrtg_poncab.config.settings.wa_alert_enabled", True),
-        patch("mrtg_poncab.config.settings.wa_gateway_url", "http://localhost:3000"),
-        patch("mrtg_poncab.config.settings.wa_target_jid", "123@g.us"),
+        patch("mrtg_cmp.config.settings.wa_alert_enabled", True),
+        patch("mrtg_cmp.config.settings.wa_gateway_url", "http://localhost:3000"),
+        patch("mrtg_cmp.config.settings.wa_target_jid", "123@g.us"),
         patch("httpx.Client.post", return_value=mock_resp),
     ):
         result = send_whatsapp_message("Test Alert Message")

@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+
+{% block nav_orbit %}active{% endblock %}
+{% block nav_mrtg %}{% endblock %}
+
+{% block title %}Telkomsel Orbit - {{ site_name | default("Enterprise Gateway") }}{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header">
+        <h2>Telkomsel Orbit</h2>
+    </div>
+    <div class="card-body">
+        <div class="alert alert-success" style="margin-bottom: 1rem;">
+            <strong>Reserved.</strong> This page is a placeholder for the upcoming Telkomsel
+            Orbit 20x modem monitoring dashboard. Navigation is already in place so the
+            Orbit view can be enabled without a URL change.
+        </div>
+
+        <p style="font-size: 0.9rem; color: var(--text-muted);">
+            The unified <a href="/">MRTG Monitoring</a> dashboard currently covers two
+            sources: live MikroTik WAN telemetry polled every 30 seconds, and the
+            TelkomCare Netcare branch graphs refreshed every
+            {{ netcare_poll_interval_seconds if netcare_poll_interval_seconds else 300 }} seconds.
+            Orbit modem metrics will appear here as a third section.
+        </p>
+
+        <div style="display: flex; gap: 0.5rem; margin-top: 1.25rem; flex-wrap: wrap;">
+            <a href="/" class="btn btn-primary">Back to MRTG Monitoring</a>
+            <a href="/console" class="btn btn-secondary">Web Console</a>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -15,12 +15,10 @@ from .auth import ensure_admin_user, hash_password
 from .collector import TrafficCollector
 from .config import settings
 from .db import Database
+from .logging_setup import configure_logging
+from .netcare.service import build_daemon_from_settings
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
-logger = logging.getLogger("mrtg_poncab.cli")
+logger = logging.getLogger("mrtg_cmp.cli")
 
 
 def cmd_init_db(args: argparse.Namespace) -> int:
@@ -87,7 +85,34 @@ def cmd_web(args: argparse.Namespace) -> int:
     host = args.host or settings.web_host
     port = args.port or settings.web_port
     logger.info("Starting web server on http://%s:%d ...", host, port)
-    uvicorn.run("mrtg_poncab.web.app:app", host=host, port=port, reload=False)
+    uvicorn.run("mrtg_cmp.web.app:app", host=host, port=port, reload=False)
+    return 0
+
+
+def cmd_netcare(args: argparse.Namespace) -> int:
+    """Run the TelkomCare Netcare scraper daemon."""
+    if not settings.netcare_enabled:
+        logger.error("Netcare scraper is disabled (NETCARE_ENABLED=false).")
+        return 1
+
+    daemon = build_daemon_from_settings(settings)
+    interval = args.interval or settings.netcare_poll_interval_seconds
+    if interval != daemon.interval_seconds:
+        daemon.interval_seconds = max(1, interval)
+
+    logger.info(
+        "Starting Netcare scraper daemon (every %ds, %d targets)...",
+        daemon.interval_seconds,
+        len(daemon.service.targets),
+    )
+
+    stop_event = threading.Event()
+    daemon.install_signal_handlers(stop_event)
+    try:
+        daemon.run(stop_event=stop_event, max_rounds=args.iterations)
+    except KeyboardInterrupt:
+        logger.info("Netcare scraper interrupted by user; shutting down...")
+        stop_event.set()
     return 0
 
 
@@ -95,6 +120,7 @@ def cmd_all(args: argparse.Namespace) -> int:
     """Run both collector daemon and web dashboard concurrently."""
     stop_event = threading.Event()
     collector = TrafficCollector()
+    threads: list[threading.Thread] = []
 
     def collector_worker() -> None:
         try:
@@ -102,29 +128,42 @@ def cmd_all(args: argparse.Namespace) -> int:
         except Exception as exc:
             logger.error("Collector worker encountered error: %s", exc)
 
-    collector_thread = threading.Thread(
-        target=collector_worker, daemon=True, name="CollectorThread"
+    threads.append(
+        threading.Thread(target=collector_worker, daemon=True, name="CollectorThread")
     )
-    collector_thread.start()
+
+    if getattr(args, "with_netcare", False):
+        daemon = build_daemon_from_settings(settings)
+        daemon.install_signal_handlers(stop_event)
+        threads.append(
+            threading.Thread(
+                target=daemon.run, kwargs={"stop_event": stop_event}, daemon=True,
+                name="NetcareDaemonThread",
+            )
+        )
+
+    for thread in threads:
+        thread.start()
 
     host = args.host or settings.web_host
     port = args.port or settings.web_port
     logger.info("Running unified collector and web service on http://%s:%d", host, port)
 
     try:
-        uvicorn.run("mrtg_poncab.web.app:app", host=host, port=port, reload=False)
+        uvicorn.run("mrtg_cmp.web.app:app", host=host, port=port, reload=False)
     except KeyboardInterrupt:
         logger.info("Shutting down unified services...")
     finally:
         stop_event.set()
-        collector_thread.join(timeout=3)
+        for thread in threads:
+            thread.join(timeout=3)
     return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
     """Build and return command-line argument parser."""
     parser = argparse.ArgumentParser(
-        prog="mrtg-poncab",
+        prog="mrtg-cmp",
         description="MRTG Traffic Monitor - MikroTik WAN Traffic Monitoring & Reporting",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -153,18 +192,44 @@ def build_parser() -> argparse.ArgumentParser:
     p_web.add_argument("--port", type=int, help="Binding port (default 8000)")
     p_web.set_defaults(func=cmd_web)
 
+    # netcare
+    p_netcare = subparsers.add_parser(
+        "netcare", help="Run the TelkomCare Netcare branch graph scraper daemon"
+    )
+    p_netcare.add_argument(
+        "--interval",
+        "-i",
+        type=int,
+        help="Seconds between scrape rounds (default: NETCARE_POLL_INTERVAL_SECONDS)",
+    )
+    p_netcare.add_argument(
+        "--iterations", "-n", type=int, help="Maximum scrape rounds (for tests)"
+    )
+    p_netcare.set_defaults(func=cmd_netcare)
+
     # all
     p_all = subparsers.add_parser("all", help="Run both collector and web server concurrently")
     p_all.add_argument("--host", help="Binding host IP")
     p_all.add_argument("--port", type=int, help="Binding port")
     p_all.add_argument("--interval", "-i", type=int, help="Polling interval in seconds")
+    p_all.add_argument(
+        "--with-netcare",
+        action="store_true",
+        help="Also run the TelkomCare Netcare scraper daemon in a background thread",
+    )
     p_all.set_defaults(func=cmd_all)
 
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Main execution entrypoint for CLI."""
+    """Main execution entrypoint for CLI.
+
+    Logging is configured here, before the subcommand runs, so every entrypoint
+    (``init-db``, ``create-user``, ``collect``, ``web``, ``netcare``, ``all``)
+    writes the same timestamped lines to ``logs/mrtg-cmp.log`` (FR-16.1).
+    """
+    configure_logging(settings.log_file, settings.log_level)
     parser = build_parser()
     args = parser.parse_args(argv if argv is not None else sys.argv[1:])
     return int(args.func(args))

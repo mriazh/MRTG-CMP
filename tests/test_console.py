@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from unittest.mock import MagicMock, patch
 
-from mrtg_poncab.console import (
+from mrtg_cmp.console import (
     ConsoleSession,
     ConsoleSessionManager,
     execute_routeros_command,

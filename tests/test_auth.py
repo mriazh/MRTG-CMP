@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from mrtg_poncab.auth import (
+from mrtg_cmp.auth import (
     create_user_session,
     ensure_admin_user,
     get_session_user,
@@ -13,8 +13,8 @@ from mrtg_poncab.auth import (
     revoke_session,
     verify_password,
 )
-from mrtg_poncab.config import Settings
-from mrtg_poncab.db import Database
+from mrtg_cmp.config import Settings
+from mrtg_cmp.db import Database
 
 
 def test_password_hashing_and_verification() -> None:

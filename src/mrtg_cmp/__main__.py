@@ -1,4 +1,4 @@
-"""Executable module entrypoint: python -m mrtg_poncab."""
+"""Executable module entrypoint: python -m mrtg_cmp."""
 
 from __future__ import annotations
 

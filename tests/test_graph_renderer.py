@@ -13,8 +13,8 @@ from matplotlib.colors import to_rgba
 from matplotlib.text import Text
 from matplotlib.ticker import NullLocator
 
-import mrtg_poncab.graph_renderer as graph_renderer
-from mrtg_poncab.graph_renderer import (
+import mrtg_cmp.graph_renderer as graph_renderer
+from mrtg_cmp.graph_renderer import (
     calculate_statistics,
     format_engineering_bits,
     nice_ceiling,

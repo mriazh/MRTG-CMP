@@ -7,7 +7,7 @@ import io
 
 from openpyxl import load_workbook
 
-from mrtg_poncab.export import export_csv, export_excel
+from mrtg_cmp.export import export_csv, export_excel
 
 
 def test_export_csv_validity() -> None:

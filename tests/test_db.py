@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from mrtg_poncab.db import Database, TrafficSample
+from mrtg_cmp.db import Database, TrafficSample
 
 
 def test_initializes_wal_schema_and_indexes(tmp_path: Path) -> None:

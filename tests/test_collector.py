@@ -6,12 +6,12 @@ import socket
 from pathlib import Path
 from typing import Any
 
-from mrtg_poncab.collector import (
+from mrtg_cmp.collector import (
     DEFAULT_MAX_SANE_BPS,
     TrafficCollector,
     calculate_rate,
 )
-from mrtg_poncab.db import Database
+from mrtg_cmp.db import Database
 
 
 def test_calculate_rate_first_baseline_sample() -> None:
@@ -169,7 +169,7 @@ def test_diagnose_failure_scenarios(tmp_path: Path) -> None:
     """_diagnose_failure correctly classifies 5 failure scenarios."""
     from unittest.mock import MagicMock, patch
 
-    from mrtg_poncab.notifier import (
+    from mrtg_cmp.notifier import (
         SCENARIO_DEBIAN_NET_DOWN,
         SCENARIO_MIKROTIK_OFFLINE,
         SCENARIO_ROUTEROS_API_DOWN,
@@ -212,7 +212,7 @@ def test_diagnose_failure_scenarios(tmp_path: Path) -> None:
         patch.object(collector.config, "tunnel_web_password", "<REDACTED>"),
         patch.object(collector.config, "tunnel_web_service_id", "123"),
         patch(
-            "mrtg_poncab.tunnel_watchdog.tunnel_watchdog.inspect_member_portal",
+            "mrtg_cmp.tunnel_watchdog.tunnel_watchdog.inspect_member_portal",
             return_value={"success": True, "code": "KONEKSI_ERROR", "needs_restart": True},
         ),
     ):
@@ -228,7 +228,7 @@ def test_diagnose_failure_scenarios(tmp_path: Path) -> None:
         patch.object(collector.config, "tunnel_web_password", "<REDACTED>"),
         patch.object(collector.config, "tunnel_web_service_id", "123"),
         patch(
-            "mrtg_poncab.tunnel_watchdog.tunnel_watchdog.inspect_member_portal",
+            "mrtg_cmp.tunnel_watchdog.tunnel_watchdog.inspect_member_portal",
             return_value={"success": True, "code": "CONNECTED", "needs_restart": False},
         ),
     ):

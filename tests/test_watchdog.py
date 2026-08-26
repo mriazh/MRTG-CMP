@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from unittest.mock import MagicMock, patch
 
-from mrtg_poncab.tunnel_watchdog import MEMBER_BASE_URL, TunnelWatchdog
+from mrtg_cmp.tunnel_watchdog import MEMBER_BASE_URL, TunnelWatchdog
 
 
 def _mock_portal_client(status_json: dict[str, object], detail_body: str = "") -> MagicMock:

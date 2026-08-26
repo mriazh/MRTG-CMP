@@ -3,7 +3,7 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mrtg-poncab"
+name = "mrtg-cmp"
 version = "0.1.0"
 description = "MikroTik WAN traffic monitoring, history, and reporting for enterprise branch gateways"
 readme = "requirements.md"
@@ -20,10 +20,13 @@ dependencies = [
     "pydantic>=2.8,<3",
     "pydantic-settings>=2.3,<3",
     "httpx>=0.27,<1",
+    "pillow>=10.0,<13",
+    "selenium>=4.20,<5",
+    "pyotp>=2.9,<3",
 ]
 
 [project.scripts]
-mrtg-poncab = "mrtg_poncab.cli:main"
+mrtg-cmp = "mrtg_cmp.cli:main"
 
 [project.optional-dependencies]
 dev = [
@@ -53,7 +56,7 @@ ignore = ["B008"]
 
 [tool.mypy]
 python_version = "3.12"
-packages = ["mrtg_poncab"]
+packages = ["mrtg_cmp"]
 strict = true
 
 [[tool.mypy.overrides]]

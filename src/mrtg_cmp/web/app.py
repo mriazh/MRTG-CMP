@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -9,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Form, Query, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -29,10 +30,26 @@ from ..console import console_manager, execute_routeros_command
 from ..db import Database
 from ..export import export_csv, export_excel
 from ..graph_renderer import format_engineering_bits, render_traffic_graph
+from ..logging_setup import configure_logging
+from ..netcare.query import NetcareQueryTracker, estimate_seconds, partition_for
+from ..netcare.service import build_service_from_settings
+from ..netcare.targets import (
+    DEFAULT_TARGETS,
+    REGION_ADDRESSES,
+    REGION_ORDER,
+    region_counts,
+    region_label,
+    resolve_targets,
+    service_badge_class,
+    service_counts,
+    service_description,
+    service_label,
+)
 
 WIB_OFFSET = timedelta(hours=7)
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
+NETCARE_IMAGE_MAX_AGE_SECONDS = 60
 
 
 def _now_wib() -> datetime:
@@ -135,9 +152,185 @@ def resolve_time_range(
     return start_epoch, end_epoch, display_st, display_et, active
 
 
+def _netcare_service() -> Any:
+    """Return a NetcareService bound to the currently configured cache directory."""
+
+    return build_service_from_settings(settings)
+
+
+#: One tracker per cache directory. The daemon process owns the browser sessions,
+#: so a web request asks for a fan-out rather than starting its own pool.
+_TRACKERS: dict[str, NetcareQueryTracker] = {}
+
+
+def _netcare_tracker(service: Any) -> NetcareQueryTracker:
+    """Return the query tracker bound to a service's cache directory."""
+
+    key = str(service.cache.cache_dir)
+    tracker = _TRACKERS.get(key)
+    if tracker is None:
+        tracker = NetcareQueryTracker(
+            lambda **kwargs: service.query(**kwargs),
+            total_targets=len(service.targets),
+            workers=settings.netcare_workers,
+        )
+        _TRACKERS[key] = tracker
+    return tracker
+
+
+async def _request_json(request: Request) -> dict[str, Any]:
+    """Parse a JSON request body, tolerating an empty one.
+
+    Raises:
+        ValueError: when the body is present but is not a JSON object.
+    """
+
+    raw = await request.body()
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw)
+    except ValueError as exc:
+        raise ValueError("Request body must be JSON") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Request body must be a JSON object")
+    return payload
+
+
+def _optional_str(value: Any) -> str | None:
+    """Return a non-empty string for a request field, or None."""
+
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _netcare_image_urls(service: Any, day: str | None) -> dict[str, str]:
+    """Return ``{target: image_url}`` for a partition, used after a query ends."""
+
+    return {
+        target.target: _netcare_image_url(target.target, day)
+        for target in service.targets
+    }
+
+
+def _netcare_image_url(target_id: str, day: str | None) -> str:
+    """Return the image URL for a target inside a cache partition."""
+
+    base = f"/api/netcare/graph/{target_id}.png"
+    return f"{base}?day={day}" if day else base
+
+
+def resolve_netcare_window(
+    preset: str = "today",
+    start_str: str | None = None,
+    end_str: str | None = None,
+) -> tuple[datetime, datetime]:
+    """Resolve a Netcare preset or custom range into a WIB wall-clock window.
+
+    Reuses the dashboard's own preset semantics so a Netcare range and the
+    MikroTik range always mean the same thing to the operator (FR-15.2).
+    """
+
+    start_epoch, end_epoch, _, _, _ = resolve_time_range(
+        preset=preset or "today",
+        start_str=start_str,
+        end_str=end_str,
+    )
+    return (
+        datetime.fromtimestamp(start_epoch, tz=UTC) + WIB_OFFSET,
+        datetime.fromtimestamp(end_epoch, tz=UTC) + WIB_OFFSET,
+    )
+
+
+def _netcare_context(day: str | None = None) -> dict[str, Any]:
+    """Build the dashboard context for the Netcare branch-link section."""
+
+    service = _netcare_service()
+    cache = service.cache
+    if day is None:
+        # The default (live) view reads the flat root cache, so the newest date
+        # partition is promoted into it here or the operator would keep seeing
+        # the stale seed captures while yesterday's fresh graphs sit on disk.
+        cache.promote_newest_partition()
+    try:
+        manifest = cache.read_manifest(day)
+    except ValueError:
+        day, manifest = None, cache.read_manifest()
+    targets = service.targets or list(DEFAULT_TARGETS)
+
+    cards: list[dict[str, Any]] = []
+    for target in targets:
+        entry = manifest.get(target.target, {})
+        payload = target.as_dict()
+        payload.update(
+            {
+                "status": entry.get("status", "pending"),
+                "last_scraped_at": entry.get("last_scraped_at"),
+                "last_error": entry.get("last_error"),
+                "file_size": entry.get("file_size", 0),
+                "has_image": cache.image_path(target.target, day).is_file(),
+                "image_url": _netcare_image_url(target.target, day),
+            }
+        )
+        cards.append(payload)
+
+    counts = region_counts(targets)
+    grouped = [
+        {
+            "code": code,
+            "label": region_label(code),
+            "address": REGION_ADDRESSES.get(code, ""),
+            "count": counts.get(code, 0),
+        }
+        for code in REGION_ORDER
+    ]
+
+    service_totals = service_counts(targets)
+    service_grouped = [
+        {
+            "code": code,
+            "label": service_label(code),
+            "description": service_description(code),
+            "badge_class": service_badge_class(code),
+            "count": count,
+        }
+        for code, count in service_totals.items()
+    ]
+
+    return {
+        # Public API shape consumed by the dashboard JavaScript.
+        "targets": cards,
+        "regions": grouped,
+        "services": service_grouped,
+        "total": len(cards),
+        "day": day,
+        "partitions": cache.list_partitions(),
+        "workers": settings.netcare_workers,
+        # Template variable names.
+        "netcare_enabled": settings.netcare_enabled,
+        "netcare_cards": cards,
+        "netcare_regions": grouped,
+        "netcare_services": service_grouped,
+        "netcare_total": len(cards),
+        "netcare_refresh_seconds": settings.dashboard_refresh_seconds,
+        "netcare_poll_interval_seconds": settings.netcare_poll_interval_seconds,
+        "netcare_workers": settings.netcare_workers,
+        "netcare_day": day or "",
+        "netcare_partitions": cache.list_partitions(),
+        "netcare_estimated_seconds": estimate_seconds(len(cards), settings.netcare_workers),
+    }
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Application lifespan context: seeds default admin user on startup."""
+    """Application lifespan context: configures logging and seeds the admin user.
+
+    Logging is configured here as well as in the CLI so that starting the app
+    directly, e.g. ``uvicorn mrtg_cmp.web.app:app``, still writes the log file
+    (FR-16.1). The call is idempotent, so the two entrypoints may both run it.
+    """
+    configure_logging(settings.log_file, settings.log_level)
     db = Database(settings.database_path)
     ensure_admin_user(db, settings)
     yield
@@ -249,6 +442,7 @@ def dashboard_view(
     start: str | None = Query(None),
     end: str | None = Query(None),
     fullday: str | None = Query(None),
+    netcare_day: str | None = Query(None),
     current_user: dict[str, Any] = Depends(require_authenticated_user),
     db: Database = Depends(get_db),
 ) -> Any:
@@ -294,21 +488,6 @@ def dashboard_view(
     c_start = display_st[:16]
     c_end = display_et[:16]
 
-    raw_recent = db.get_recent_traffic_samples(limit=10)
-    formatted_recent: list[dict[str, Any]] = []
-    for sample in raw_recent:
-        sample_utc = datetime.fromtimestamp(sample["epoch"], tz=UTC)
-        sample_wib = sample_utc + WIB_OFFSET
-        formatted_recent.append(
-            {
-                "timestamp_wib": sample_wib.strftime("%Y-%m-%d %H:%M:%S"),
-                "status": sample["status"],
-                "inbound_formatted": format_engineering_bits(sample["rx_bps"]),
-                "outbound_formatted": format_engineering_bits(sample["tx_bps"]),
-                "uptime": sample.get("uptime") or "unknown",
-            }
-        )
-
     return templates.TemplateResponse(
         request=request,
         name="dashboard.html",
@@ -327,7 +506,6 @@ def dashboard_view(
             "latest_timestamp_wib": latest_ts_wib,
             "current_in_formatted": cur_in,
             "current_out_formatted": cur_out,
-            "recent_samples": formatted_recent,
             "graph_title": (
                 f"Traffic {settings.routeros_interface} ({settings.uplink_name}) - "
                 f"{settings.site_name}"
@@ -338,8 +516,184 @@ def dashboard_view(
             "export_csv_url": export_csv_url,
             "display_start": display_st,
             "display_end": display_et,
+            **_netcare_context(netcare_day),
         },
     )
+
+
+# 2b. TelkomCare Netcare Branch Links & Reserved Telkomsel Orbit Page
+@app.get("/orbit", response_class=HTMLResponse)
+def orbit_view(
+    request: Request,
+    current_user: dict[str, Any] = Depends(require_authenticated_user),
+) -> Any:
+    """Render the reserved placeholder for the upcoming Telkomsel Orbit dashboard."""
+    return templates.TemplateResponse(
+        request=request,
+        name="orbit.html",
+        context={
+            "site_name": settings.site_name,
+            "location_name": settings.location_name,
+            "uplink_name": settings.uplink_name,
+            "app_title": settings.app_title,
+            "current_user": current_user,
+            "netcare_poll_interval_seconds": settings.netcare_poll_interval_seconds,
+        },
+    )
+
+
+@app.get("/api/netcare/targets")
+def api_netcare_targets(
+    day: str | None = Query(None),
+    current_user: dict[str, Any] = Depends(require_authenticated_user),
+) -> dict[str, Any]:
+    """Return every Netcare branch target with status, timestamp, and image URL."""
+    return _netcare_context(day)
+
+
+@app.post("/api/netcare/query")
+async def api_netcare_query(
+    request: Request,
+    current_user: dict[str, Any] = Depends(require_authenticated_user),
+) -> Response:
+    """Start an on-demand Netcare capture for a time range and return its job id.
+
+    The request never blocks: the fan-out runs on a background thread while the
+    dashboard polls ``/api/netcare/status`` behind the loading dialog (FR-15.3).
+    """
+
+    try:
+        body = await _request_json(request)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=status.HTTP_400_BAD_REQUEST)
+
+    window = resolve_netcare_window(
+        preset=str(body.get("preset") or "today"),
+        start_str=_optional_str(body.get("start")),
+        end_str=_optional_str(body.get("end")),
+    )
+    requested = body.get("targets")
+    targets: list[str] = [str(t) for t in requested] if isinstance(requested, list) else []
+
+    service = _netcare_service()
+    known = {t.target for t in service.targets}
+    if targets:
+        targets = [t for t in targets if t in known]
+        if not targets:
+            return JSONResponse(
+                {"error": "No known Netcare targets in request"},
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+    start_wib, end_wib = window
+    # The window is WIB wall-clock, so the partition decision must be too.
+    partition = partition_for(start_wib, now=_now_wib())
+    total = len(targets) if targets else len(service.targets)
+
+    job = _netcare_tracker(service).start(
+        preset=str(body.get("preset") or "today"),
+        start=start_wib,
+        end=end_wib,
+        day=partition,
+        total=total,
+        target_ids=targets or None,
+    )
+    snapshot = job.snapshot()
+    snapshot["estimated_seconds"] = estimate_seconds(total, settings.netcare_workers)
+    snapshot["image_url_day"] = partition
+    return JSONResponse(snapshot, status_code=status.HTTP_202_ACCEPTED)
+
+
+@app.get("/api/netcare/status")
+def api_netcare_status(
+    job_id: str = Query(...),
+    current_user: dict[str, Any] = Depends(require_authenticated_user),
+) -> Response:
+    """Return live progress for a Netcare query so the dialog can count down (FR-15.3)."""
+
+    service = _netcare_service()
+    job = _netcare_tracker(service).get(job_id)
+    if job is None:
+        return JSONResponse(
+            {"error": "Unknown Netcare query job"},
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    snapshot = job.snapshot()
+    snapshot["image_url_day"] = job.day
+    if not job.running and not job.cancel_requested:
+        snapshot["image_urls"] = _netcare_image_urls(service, job.day)
+    return JSONResponse(snapshot)
+
+
+@app.post("/api/netcare/cancel")
+def api_netcare_cancel(
+    job_id: str = Query(...),
+    current_user: dict[str, Any] = Depends(require_authenticated_user),
+) -> Response:
+    """Abandon a running Netcare query so the operator is not held hostage.
+
+    Cancellation is cooperative: the scrape loop stops between targets, so a
+    capture already in flight still finishes rather than leaving a half-written
+    file. The dialog polls ``/api/netcare/status``, which settles the job and
+    reports ``cancelled`` so the client can stop cleanly.
+    """
+
+    service = _netcare_service()
+    job = _netcare_tracker(service).cancel(job_id)
+    if job is None:
+        return JSONResponse(
+            {"error": "No running Netcare query job to cancel"},
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    return JSONResponse(job.snapshot(), status_code=status.HTTP_202_ACCEPTED)
+
+
+@app.get("/api/netcare/graph/{filename}")
+def api_netcare_graph(
+    filename: str,
+    download: bool = Query(False),
+    day: str | None = Query(None),
+    current_user: dict[str, Any] = Depends(require_authenticated_user),
+) -> Response:
+    """Serve a cached branch graph PNG from the Netcare cache directory."""
+    if not filename.endswith(".png"):
+        return Response(status_code=status.HTTP_404_NOT_FOUND)
+
+    target_id = filename[:-4]
+    known = {t.target for t in resolve_targets(settings.netcare_catalog_file)}
+    if target_id not in known:
+        return Response(status_code=status.HTTP_404_NOT_FOUND)
+
+    cache = _netcare_service().cache
+    try:
+        image_path = cache.image_path(target_id, day)
+        root = cache.day_dir(day)
+    except ValueError:
+        return Response(status_code=status.HTTP_404_NOT_FOUND)
+    if not image_path.is_relative_to(root) or not image_path.is_file():
+        return Response(status_code=status.HTTP_404_NOT_FOUND)
+
+    try:
+        payload = image_path.read_bytes()
+    except OSError:
+        return Response(status_code=status.HTTP_404_NOT_FOUND)
+
+    headers = {"Cache-Control": f"public, max-age={NETCARE_IMAGE_MAX_AGE_SECONDS}"}
+    if download:
+        headers["Content-Disposition"] = f'attachment; filename="{target_id}.png"'
+    return Response(content=payload, media_type="image/png", headers=headers)
+
+
+@app.post("/api/netcare/refresh/{target_id}")
+def api_netcare_refresh(
+    target_id: str,
+    current_user: dict[str, Any] = Depends(require_authenticated_user),
+) -> Response:
+    """Queue a specific target for the next scrape round."""
+    service = _netcare_service()
+    if not service.refresh_targets([target_id]):
+        return Response(status_code=status.HTTP_404_NOT_FOUND)
+    return JSONResponse({"queued": True, "targets": sorted(service.pending_priority())})
 
 
 # 3. Telemetry & Graph APIs
@@ -415,8 +769,7 @@ def api_graph_png(
     png_bytes = render_traffic_graph(
         samples=samples,
         title=(
-            f"Traffic {settings.routeros_interface} ({settings.uplink_name}) - "
-            f"{settings.site_name}"
+            f"Traffic {settings.routeros_interface} ({settings.uplink_name}) - {settings.site_name}"
         ),
         start_time=display_st,
         end_time=display_et,

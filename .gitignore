@@ -29,6 +29,14 @@ data/*.db-wal
 *.log
 *.png
 
+# TelkomCare scraper runtime artifacts (graph cache, status manifest, session cookies)
+data/netcare_cache/
+
+# Local Netcare target catalog: holds the deployment's own circuit IDs, branch
+# names, and facility addresses. The committed config/netcare_targets.csv.example
+# carries the anonymous catalog instead.
+/config/netcare_targets.csv
+
 # Packaging, builds, and distributions
 *.egg-info/
 dist/

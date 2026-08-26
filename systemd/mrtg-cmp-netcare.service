@@ -1,0 +1,28 @@
+[Unit]
+Description=MRTG-CMP TelkomCare Netcare Branch Graph Scraper
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@APP_USER@
+Group=@APP_USER@
+WorkingDirectory=@APP_DIR@
+EnvironmentFile=-@APP_DIR@/.env
+ExecStart=@APP_DIR@/.venv/bin/python -m mrtg_cmp netcare
+Restart=always
+RestartSec=30s
+
+# Headless Chrome needs a private writable /tmp for its own shared memory,
+# and a writable HOME for the persistent browser profile that keeps the
+# TelkomCare session (and the cookies.json cache) alive across restarts.
+PrivateTmp=true
+Environment=HOME=@APP_DIR@
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=@APP_DIR@/data @APP_DIR@/data/netcare_cache @APP_DIR@
+
+[Install]
+WantedBy=multi-user.target

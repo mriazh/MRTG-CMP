@@ -1,0 +1,19 @@
+type,target,name,address,region,ocr_enabled,service_type
+SID,target-001,Branch Office CGK 1,Jakarta - CGK,CGK,true,Astinet
+SID,target-002,Branch Office CGK 2,Jakarta - CGK,CGK,true,Astinet
+SID,target-003,Branch Office CGK 3,Jakarta - CGK,CGK,true,Metro-E
+SID,target-004,Branch Office CGK 4,Jakarta - CGK,CGK,true,Metro-E
+SID,target-005,Branch Office CGK 5,Jakarta - CGK,CGK,true,Metro-E
+SID,target-006,Branch Office CGK 6,Jakarta - CGK,CGK,true,VPN IP
+SID,target-007,Branch Office CGK 7,Jakarta - CGK,CGK,true,Astinet
+SID,target-008,Branch Office SUB 1,Surabaya,SUB,true,Astinet
+SID,target-009,Branch Office SUB 2,Surabaya,SUB,true,VPN IP
+SID,target-010,Branch Office UPG 1,Makassar,UPG,true,VPN IP
+SID,target-011,Branch Office UPG 2,Makassar,UPG,true,Astinet
+Graph-title,target-012,Branch Office UPG 3,Makassar,UPG,true,Astinet
+Graph-title,target-013,Branch Office UPG 4,Makassar,UPG,true,VPN IP
+Graph-title,target-014,Branch Office DPS 1,Denpasar,DPS,true,Metro-E
+Graph-title,target-015,Branch Office DPS 2,Denpasar,DPS,true,Metro-E
+Graph-title,target-016,Branch Office BPN 1,Balikpapan,BPN,true,VPN IP
+Graph-title,target-017,Branch Office SENTUL 1,Sentul - VPN Endpoint,SENTUL,true,VPN IP
+Graph-title,target-018,Branch Office SENTUL 2,Sentul - VPN Endpoint,SENTUL,true,VPN IP

@@ -1,0 +1,2054 @@
+{% extends "base.html" %}
+
+{% block title %}Traffic Dashboard - WAN {{ uplink_name | default("Main Uplink") }} - {{ app_title | default("MRTG Traffic Monitor") }}{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="/static/flatpickr.min.css">
+{% endblock %}
+
+{% block extra_styles %}
+.telemetry-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.metric-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 1rem 1.25rem;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+}
+
+.metric-label {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    letter-spacing: 0.04em;
+    margin-bottom: 0.35rem;
+}
+
+.metric-value {
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: var(--primary);
+}
+
+.metric-subtext {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 0.25rem;
+}
+
+.status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-weight: 700;
+    font-size: 0.85rem;
+}
+
+.status-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+}
+.status-dot.up { background-color: var(--success); }
+.status-dot.down { background-color: var(--danger); }
+.status-dot.reset { background-color: #F79009; }
+
+.controls-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 1rem 1.25rem;
+    margin-bottom: 1.5rem;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+}
+
+.preset-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    align-items: center;
+}
+
+.preset-btn {
+    padding: 0.35rem 0.65rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+    background: var(--card-bg);
+    color: var(--text-main);
+    text-decoration: none;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.preset-btn:hover {
+    background: var(--header-bg);
+    border-color: var(--primary-light);
+}
+
+.preset-btn.active {
+    background: var(--primary);
+    color: #FFFFFF !important;
+    border-color: var(--primary);
+}
+
+.custom-range-form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+}
+
+.input-time-wrapper {
+    display: inline-flex;
+    align-items: center;
+    position: relative;
+}
+
+.custom-range-form input {
+    width: 175px;
+    padding: 0.35rem 2.1rem 0.35rem 0.65rem;
+    font-size: 0.82rem;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    outline: none;
+    background: var(--input-bg);
+    color: var(--text-main);
+    font-family: monospace;
+    cursor: pointer;
+    box-sizing: border-box;
+}
+
+.custom-range-form input:focus {
+    border-color: var(--primary-light);
+}
+
+.btn-open-matrix {
+    position: absolute;
+    right: 6px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-size: 0.95rem;
+    color: var(--text-muted);
+    padding: 2px 4px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.btn-open-matrix:hover {
+    color: var(--primary);
+}
+
+.btn-now-shortcut {
+    padding: 0.35rem 0.6rem;
+    font-size: 0.78rem;
+    font-weight: 700;
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+    background: var(--card-bg);
+    color: var(--primary);
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.btn-now-shortcut:hover {
+    background: var(--primary);
+    color: #FFFFFF;
+    border-color: var(--primary);
+}
+
+/* Matrix Time Selector Modal */
+.matrix-modal-backdrop {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 9999;
+    justify-content: center;
+    align-items: center;
+    padding: 1rem;
+}
+
+.matrix-modal-backdrop.open {
+    display: flex;
+}
+
+.matrix-modal {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    box-shadow: 0 12px 30px rgba(0,0,0,0.3);
+    max-width: 820px;
+    width: 100%;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    animation: matrixFadeIn 0.15s ease-out;
+}
+
+@keyframes matrixFadeIn {
+    from { opacity: 0; transform: scale(0.97); }
+    to { opacity: 1; transform: scale(1); }
+}
+
+.matrix-modal-header {
+    background: var(--header-bg);
+    padding: 0.75rem 1.25rem;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.matrix-modal-title {
+    font-weight: 700;
+    font-size: 0.92rem;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+.matrix-selected-badge {
+    font-family: monospace;
+    font-size: 0.88rem;
+    font-weight: 700;
+    background: var(--primary);
+    color: #FFFFFF;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+}
+
+.matrix-modal-close {
+    background: transparent;
+    border: none;
+    font-size: 1.3rem;
+    cursor: pointer;
+    color: var(--text-muted);
+    padding: 0.2rem 0.5rem;
+    line-height: 1;
+}
+
+.matrix-modal-close:hover {
+    color: var(--danger);
+}
+
+.matrix-modal-body {
+    padding: 1rem 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    max-height: 78vh;
+    overflow-y: auto;
+}
+
+.matrix-quick-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    align-items: center;
+}
+
+.matrix-quick-pill {
+    padding: 0.3rem 0.6rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+    background: var(--header-bg);
+    color: var(--text-main);
+    cursor: pointer;
+    transition: all 0.12s;
+}
+
+.matrix-quick-pill:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+.matrix-grid-section {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    gap: 1.75rem;
+    align-items: start;
+}
+
+#matrix-inline-calendar {
+    width: 320px;
+    min-width: 320px;
+}
+
+#matrix-inline-calendar .flatpickr-calendar.inline {
+    width: 100% !important;
+    max-width: 320px;
+    box-shadow: none;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    margin: 0;
+}
+
+@media (max-width: 768px) {
+    .matrix-grid-section {
+        grid-template-columns: 1fr;
+        gap: 1.25rem;
+    }
+    #matrix-inline-calendar {
+        width: 100%;
+        min-width: 0;
+        display: flex;
+        justify-content: center;
+    }
+}
+
+.matrix-col-title {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    margin-bottom: 0.4rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.matrix-hours-grid {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 0.35rem;
+}
+
+.matrix-minutes-grid {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 0.35rem;
+}
+
+.matrix-btn {
+    padding: 0.45rem 0.2rem;
+    font-size: 0.82rem;
+    font-family: monospace;
+    font-weight: 600;
+    text-align: center;
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+    background: var(--card-bg);
+    color: var(--text-main);
+    cursor: pointer;
+    transition: all 0.1s ease-in-out;
+}
+
+.matrix-btn:hover {
+    background: var(--header-bg);
+    border-color: var(--primary-light);
+    color: var(--primary);
+}
+
+.matrix-btn.active {
+    background: var(--primary) !important;
+    border-color: var(--primary) !important;
+    color: #FFFFFF !important;
+    font-weight: 700;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+
+.matrix-modal-footer {
+    padding: 0.75rem 1.25rem;
+    background: var(--header-bg);
+    border-top: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+/* Flatpickr Dark Mode Theme Overrides */
+[data-theme="dark"] .flatpickr-calendar {
+    background: #1E293B;
+    border-color: #334155;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+    color: #F8FAFC;
+}
+[data-theme="dark"] .flatpickr-day {
+    color: #F8FAFC;
+}
+[data-theme="dark"] .flatpickr-day:hover,
+[data-theme="dark"] .flatpickr-day:focus {
+    background: #334155;
+    border-color: #334155;
+}
+[data-theme="dark"] .flatpickr-day.selected {
+    background: #0284C7;
+    border-color: #0284C7;
+    color: #FFFFFF;
+}
+[data-theme="dark"] .flatpickr-day.today {
+    border-color: #38BDF8;
+}
+[data-theme="dark"] .flatpickr-months .flatpickr-month,
+[data-theme="dark"] .flatpickr-current-month,
+[data-theme="dark"] span.flatpickr-weekday {
+    background: #162032;
+    color: #F8FAFC;
+    fill: #F8FAFC;
+}
+[data-theme="dark"] .flatpickr-months .flatpickr-prev-month,
+[data-theme="dark"] .flatpickr-months .flatpickr-next-month {
+    color: #94A3B8;
+    fill: #94A3B8;
+}
+[data-theme="dark"] .flatpickr-months .flatpickr-prev-month:hover svg,
+[data-theme="dark"] .flatpickr-months .flatpickr-next-month:hover svg {
+    fill: #38BDF8;
+}
+
+.graph-card {
+    text-align: center;
+}
+
+.graph-header-actions {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.graph-img-container {
+    background: #FFFFFF;
+    padding: 0.5rem;
+    border-radius: 4px;
+    display: inline-block;
+    max-width: 100%;
+    overflow-x: auto;
+}
+
+.graph-img {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    margin: 0 auto;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+}
+
+.autorefresh-select {
+    padding: 0.35rem 0.5rem;
+    font-size: 0.8rem;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: #FFFFFF;
+    color: #344054;
+    outline: none;
+}
+
+.section-divider {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin: 2rem 0 1.25rem;
+}
+
+.section-divider h2 {
+    font-size: 0.8rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.section-divider::before,
+.section-divider::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--border-color);
+}
+
+.netcare-filter-pills {
+    display: flex;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+}
+
+.netcare-pill {
+    padding: 0.3rem 0.7rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    background: var(--card-bg);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background-color 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.netcare-pill:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+.netcare-pill.active {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #FFFFFF;
+}
+
+/* --- Service type: one colour per product, shared by legend and card badge --- */
+.svc-astinet {
+    --svc-color: #0891B2;
+    --svc-tint: rgba(8, 145, 178, 0.14);
+}
+
+.svc-metro-e {
+    --svc-color: #6D28D9;
+    --svc-tint: rgba(109, 40, 217, 0.14);
+}
+
+.svc-vpn-ip {
+    --svc-color: #059669;
+    --svc-tint: rgba(5, 150, 105, 0.14);
+}
+
+.svc-unclassified {
+    --svc-color: var(--text-muted);
+    --svc-tint: transparent;
+}
+
+.netcare-service-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+}
+
+.netcare-service-legend-label {
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-right: 0.2rem;
+}
+
+.netcare-service-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.netcare-legend-dot {
+    display: inline-block;
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 50%;
+    flex: 0 0 auto;
+    background: var(--svc-color, var(--text-muted));
+}
+
+.netcare-service-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.1rem 0.45rem;
+    border-radius: 999px;
+    border: 1px solid var(--svc-color, var(--text-muted));
+    background: var(--svc-tint, transparent);
+    color: var(--svc-color, var(--text-muted));
+    font-size: 0.66rem;
+    font-weight: 700;
+    line-height: 1.5;
+    white-space: nowrap;
+}
+
+.netcare-card-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1.25rem;
+}
+
+@media (max-width: 992px) {
+    .netcare-card-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.netcare-card {
+    display: flex;
+    flex-direction: column;
+    /* Fills the tallest card in the grid row, which is what the footer's
+       `margin-top: auto` then aligns to a single baseline. */
+    height: 100%;
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 0.85rem 1rem;
+    cursor: pointer;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.netcare-card:hover {
+    border-color: var(--primary);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+
+.netcare-card:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+}
+
+.netcare-card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 0.5rem;
+    /* One branch name wraps to two lines and the next does not; reserving two
+       lines keeps every graph in the row starting at the same height. */
+    min-height: 48px;
+    margin-bottom: 0.4rem;
+}
+
+.netcare-card-badges {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    flex: 0 0 auto;
+}
+
+.netcare-card-name {
+    font-size: 0.88rem;
+    font-weight: 700;
+    color: var(--text-main);
+}
+
+.netcare-card-meta {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-family: monospace;
+    margin-bottom: 0.5rem;
+}
+
+.netcare-card-image {
+    width: 100%;
+    height: auto;
+    display: block;
+    background: var(--bg);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+}
+
+.netcare-card-image-missing {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 140px;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    background: var(--bg);
+    border: 1px dashed var(--border-color);
+    border-radius: 4px;
+}
+
+.netcare-card-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: auto;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--border-color);
+    font-size: 0.72rem;
+    color: var(--text-muted);
+}
+
+.netcare-modal-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.82);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+}
+
+.netcare-modal-backdrop.open {
+    display: flex;
+}
+
+.netcare-modal {
+    background: var(--card-bg);
+    border-radius: 8px;
+    max-width: 1200px;
+    width: 100%;
+    max-height: 92vh;
+    overflow-y: auto;
+    padding: 1.25rem 1.5rem;
+}
+
+.netcare-modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    margin-bottom: 0.75rem;
+}
+
+.netcare-modal-title {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--primary);
+}
+
+.netcare-modal-close {
+    background: transparent;
+    border: none;
+    font-size: 1.6rem;
+    line-height: 1;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+
+.netcare-modal-close:hover {
+    color: var(--danger);
+}
+
+.netcare-modal-image {
+    width: 100%;
+    height: auto;
+    display: block;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: #FFFFFF;
+    cursor: zoom-in;
+}
+
+.netcare-modal-meta {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    font-family: monospace;
+    margin: 0.75rem 0;
+    display: flex;
+    gap: 1.25rem;
+    flex-wrap: wrap;
+}
+
+.netcare-modal-actions {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+/* Netcare time-range toolbar (FR-15.2) */
+.netcare-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+    margin-bottom: 0.85rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.netcare-preset-group {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.netcare-preset-label {
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    margin-right: 0.25rem;
+}
+
+.netcare-range-form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+}
+
+.netcare-range-form input {
+    width: 165px;
+    padding: 0.35rem 0.65rem;
+    font-size: 0.82rem;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    outline: none;
+    background: var(--input-bg);
+    color: var(--text-main);
+    font-family: monospace;
+    box-sizing: border-box;
+}
+
+.netcare-range-form input:focus {
+    border-color: var(--primary-light);
+}
+
+.netcare-workers-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    padding: 0.3rem 0.55rem;
+    border: 1px dashed var(--border-color);
+    border-radius: 4px;
+}
+
+.netcare-cached-pill {
+    font-size: 0.75rem;
+    color: var(--primary);
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 0.25rem 0.5rem;
+    cursor: pointer;
+}
+
+.netcare-cached-pill.active {
+    background: var(--primary);
+    color: #FFFFFF;
+    border-color: var(--primary);
+}
+
+/* Polite live loading dialog (FR-15.3) */
+.netcare-progress-backdrop {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0, 0, 0, 0.35);
+    backdrop-filter: blur(2px);
+    z-index: 10050;
+    align-items: center;
+    justify-content: center;
+}
+
+.netcare-progress-backdrop.open {
+    display: flex;
+}
+
+.netcare-progress {
+    width: min(440px, 92vw);
+    padding: 1.5rem;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background: var(--card-bg);
+    color: var(--text-main);
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+    text-align: center;
+    animation: netcare-pop 0.18s ease-out;
+}
+
+@keyframes netcare-pop {
+    from { transform: translateY(10px) scale(0.97); opacity: 0; }
+    to   { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+.netcare-progress-title {
+    font-size: 0.95rem;
+    font-weight: 700;
+    margin-bottom: 0.15rem;
+}
+
+.netcare-progress-sub {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    margin-bottom: 1rem;
+}
+
+.netcare-spinner {
+    width: 46px;
+    height: 46px;
+    margin: 0 auto 0.9rem;
+    border-radius: 50%;
+    border: 3px solid var(--border-color);
+    border-top-color: var(--primary);
+    animation: netcare-spin 0.85s linear infinite;
+}
+
+.netcare-spinner.done {
+    animation: none;
+    border: none;
+    font-size: 2.4rem;
+    line-height: 46px;
+    color: #16A34A;
+}
+
+.netcare-spinner.failed {
+    animation: none;
+    border: none;
+    font-size: 2.2rem;
+    line-height: 46px;
+    color: #DC2626;
+}
+
+@keyframes netcare-spin {
+    to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .netcare-spinner { animation-duration: 3s; }
+    .netcare-progress { animation: none; }
+}
+
+.netcare-progress-track {
+    height: 8px;
+    border-radius: 999px;
+    background: var(--header-bg);
+    overflow: hidden;
+    margin-bottom: 0.6rem;
+}
+
+.netcare-progress-bar {
+    height: 100%;
+    width: 0%;
+    border-radius: 999px;
+    background: var(--primary);
+    transition: width 0.3s ease;
+}
+
+.netcare-progress-bar.done {
+    background: #16A34A;
+}
+
+.netcare-progress-bar.failed {
+    background: #DC2626;
+}
+
+.netcare-progress-count {
+    font-size: 0.82rem;
+    font-weight: 600;
+    font-family: monospace;
+    margin-bottom: 0.35rem;
+}
+
+.netcare-progress-stage {
+    margin-bottom: 0.5rem;
+    padding: 0.4rem 0.6rem;
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+    background: var(--card-bg);
+    color: var(--text-main);
+    font-size: 0.8rem;
+    min-height: 1.9rem;
+    display: flex;
+    align-items: center;
+}
+
+.netcare-timers {
+    display: flex;
+    justify-content: center;
+    gap: 0.75rem;
+    margin-top: 0.35rem;
+    font-size: 0.78rem;
+    font-family: monospace;
+    color: var(--text-muted);
+}
+
+.netcare-timer-value {
+    color: var(--text-main);
+    font-weight: 600;
+}
+
+.netcare-progress-actions {
+    margin-top: 1rem;
+    display: flex;
+    justify-content: center;
+    gap: 0.5rem;
+}
+{% endblock %}
+
+{% block content %}
+<!-- Section 1: TelkomCare Netcare Branch Links -->
+<div class="section-divider" id="netcare-section">
+    <h2>TelkomCare Netcare &middot; Branch Links ({{ netcare_total }})</h2>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2>TelkomCare Netcare</h2>
+        <div class="graph-header-actions">
+            <span class="status-badge" style="font-size: 0.78rem;">
+                <span class="status-dot up" style="width: 7px; height: 7px;"></span>
+                Scraper: every {{ netcare_poll_interval_seconds }}s &middot;
+                Auto-refresh: <span id="countdown-timer">{{ netcare_refresh_seconds }}</span>s
+            </span>
+            <button type="button" id="netcare-refresh-all" class="btn btn-secondary"
+                    style="padding: 0.35rem 0.7rem; font-size: 0.75rem;">Refresh All</button>
+        </div>
+    </div>
+    <div class="card-body">
+        <!-- Netcare time-range toolbar (FR-15.2) -->
+        <div class="netcare-toolbar" id="netcare-toolbar">
+            <div class="netcare-preset-group" id="netcare-preset-group" role="group"
+                 aria-label="Netcare graph time range presets">
+                <span class="netcare-preset-label">PRESET:</span>
+                <button type="button" class="preset-btn netcare-preset" data-preset="1h">1 Hour</button>
+                <button type="button" class="preset-btn netcare-preset" data-preset="3h">3 Hours</button>
+                <button type="button" class="preset-btn netcare-preset" data-preset="6h">6 Hours</button>
+                <button type="button" class="preset-btn netcare-preset" data-preset="12h">12 Hours</button>
+                <button type="button" class="preset-btn netcare-preset" data-preset="24h">24 Hours</button>
+                <button type="button" class="preset-btn netcare-preset active" data-preset="today">Today</button>
+                <button type="button" class="preset-btn netcare-preset" data-preset="yesterday">Yesterday</button>
+                <button type="button" class="preset-btn netcare-preset" data-preset="7d">7 Days</button>
+                <button type="button" class="preset-btn netcare-preset" data-preset="month">This Month</button>
+                <button type="button" class="preset-btn netcare-preset" data-preset="fullday" title="Select full day (00:00 - 23:59)">
+                    📅 Select Day (24h)
+                </button>
+            </div>
+
+            <form class="netcare-range-form" id="netcare-range-form" autocomplete="off">
+                <label for="netcare-start">From:</label>
+                <input type="text" id="netcare-start" name="start" placeholder="YYYY-MM-DD HH:MM">
+                <label for="netcare-end">To:</label>
+                <input type="text" id="netcare-end" name="end" placeholder="YYYY-MM-DD HH:MM">
+                <button type="button" id="netcare-btn-now" class="btn-now-shortcut" title="Set 'To' to current time">Now</button>
+                <button type="submit" class="btn btn-primary" style="padding: 0.35rem 0.75rem; font-size: 0.8rem;">Filter</button>
+            </form>
+
+            <div class="netcare-preset-group">
+                <span class="netcare-workers-badge" title="Parallel scraper worker threads">
+                    ⚙ {{ netcare_workers }} worker{% if netcare_workers != 1 %}s{% endif %}
+                </span>
+                <span class="netcare-cached-pill" id="netcare-cached-pill" hidden
+                      title="Instantly serve a day that was captured before"></span>
+            </div>
+        </div>
+
+        <div class="netcare-filter-pills" id="netcare-filter-pills" role="group" aria-label="Filter branches by region">
+            <button type="button" class="netcare-pill active" data-region="ALL">
+                All ({{ netcare_total }})
+            </button>
+            {% for region in netcare_regions %}
+            <button type="button" class="netcare-pill" data-region="{{ region.code }}">
+                {{ region.label }} ({{ region.count }})
+            </button>
+            {% endfor %}
+        </div>
+
+        <div class="netcare-service-bar" id="netcare-service-filter" role="group" aria-label="Filter branches by service type">
+            <span class="netcare-service-legend-label">Service Type</span>
+            <button type="button" class="netcare-pill netcare-service-pill active" data-service="ALL">
+                Semua Layanan ({{ netcare_total }})
+            </button>
+            {% for service in netcare_services %}
+            <button type="button" class="netcare-pill netcare-service-pill {{ service.badge_class }}"
+                    data-service="{{ service.code }}"
+                    title="{{ service.label }} &mdash; {{ service.description }}">
+                <span class="netcare-legend-dot {{ service.badge_class }}" aria-hidden="true"></span>
+                {{ service.label }} ({{ service.description }} - {{ service.count }})
+            </button>
+            {% endfor %}
+        </div>
+
+        <div class="netcare-card-grid" id="netcare-card-grid">
+            {% for card in netcare_cards %}
+            <div class="netcare-card"
+                 data-region="{{ card.region }}"
+                 data-service="{{ card.service_type }}"
+                 data-target="{{ card.target }}"
+                 data-name="{{ card.name }}"
+                 data-type="{{ card.type }}"
+                 data-address="{{ card.address }}"
+                 data-image-url="{{ card.image_url }}"
+                 data-status="{{ card.status }}"
+                 data-has-image="{{ 'true' if card.has_image else 'false' }}"
+                 tabindex="0"
+                 role="button"
+                 aria-label="Open graph for {{ card.name }}">
+                <div class="netcare-card-head">
+                    <span class="netcare-card-name">{{ card.name }}</span>
+                    <span class="netcare-card-badges">
+                        <span class="netcare-service-badge {{ card.service_badge_class }}"
+                              title="{{ card.service_label }} &mdash; {{ card.service_description }}">{{ card.service_label }}</span>
+                        <span class="status-badge" style="font-size: 0.7rem;">
+                            <span class="status-dot {% if card.status in ('ok',) %}up{% elif card.status == 'pending' %}reset{% else %}down{% endif %}"></span>
+                            {{ card.status }}
+                        </span>
+                    </span>
+                </div>
+                <div class="netcare-card-meta">
+                    {{ card.target }} &middot; {{ card.type }}<br>
+                    {{ card.address }} &middot; {{ card.region_label }}
+                </div>
+                {% if card.has_image %}
+                {# A day partition already ends in ?day=..., so the stamp joins with &. #}
+                <img src="{{ card.image_url }}{{ '&' if '?' in card.image_url else '?' }}t=0" alt="MRTG graph for {{ card.name }}" class="netcare-card-image" loading="lazy">
+                {% else %}
+                <div class="netcare-card-image-missing">No graph captured yet</div>
+                {% endif %}
+                <div class="netcare-card-footer">
+                    <span class="netcare-age" data-scraped-at="{{ card.last_scraped_at or '' }}">
+                        {% if card.last_scraped_at %}Updated {{ card.last_scraped_at }}{% else %}Never scraped{% endif %}
+                    </span>
+                    <span>{{ card.region_label }}</span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <p id="netcare-empty-message" style="display: none; margin-top: 1rem; color: var(--text-muted); font-size: 0.85rem;">
+            No branch links match this filter.
+        </p>
+    </div>
+</div>
+
+<!-- Netcare Fullscreen Zoom Modal -->
+<div id="netcare-modal" class="netcare-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="netcare-modal-title">
+    <div class="netcare-modal">
+        <div class="netcare-modal-header">
+            <div>
+                <div class="netcare-modal-title" id="netcare-modal-title">Branch Graph</div>
+                <div class="netcare-modal-meta">
+                    <span id="netcare-modal-target"></span>
+                    <span id="netcare-modal-type"></span>
+                    <span id="netcare-modal-address"></span>
+                    <span id="netcare-modal-status"></span>
+                </div>
+            </div>
+            <button type="button" id="netcare-modal-close" class="netcare-modal-close" aria-label="Close">&times;</button>
+        </div>
+        <img id="netcare-modal-image" class="netcare-modal-image" alt="Full resolution branch graph">
+        <div class="netcare-modal-actions" style="margin-top: 1rem;">
+            <a id="netcare-modal-download" href="#" download class="btn btn-primary" style="padding: 0.4rem 0.8rem; font-size: 0.8rem;">Download PNG</a>
+            <button type="button" id="netcare-modal-refresh" class="btn btn-secondary" style="padding: 0.4rem 0.8rem; font-size: 0.8rem;">Refresh This Branch</button>
+        </div>
+    </div>
+</div>
+
+<!-- Polite Live Loading Dialog (FR-15.3): elapsed time, never a countdown -->
+<div id="netcare-progress-backdrop" class="netcare-progress-backdrop" role="dialog" aria-modal="true"
+     aria-labelledby="netcare-progress-title" aria-describedby="netcare-progress-sub">
+    <div class="netcare-progress">
+        <div id="netcare-progress-spinner" class="netcare-spinner" role="status" aria-live="polite"></div>
+        <div class="netcare-progress-title" id="netcare-progress-title">Mengambil data grafik dari TelkomCare...</div>
+        <div class="netcare-progress-sub" id="netcare-progress-sub">Mohon tunggu sebentar, halaman tetap bisa digunakan.</div>
+        <div class="netcare-progress-stage" id="netcare-progress-stage" role="status" aria-live="polite">Menyiapkan...</div>
+        <div class="netcare-progress-track">
+            <div class="netcare-progress-bar" id="netcare-progress-bar" role="progressbar"
+                 aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-labelledby="netcare-progress-count"></div>
+        </div>
+        <div class="netcare-progress-count" id="netcare-progress-count">0 / {{ netcare_total }} cabang selesai</div>
+        <div class="netcare-timers">
+            <span>Waktu berjalan: <span class="netcare-timer-value" id="netcare-progress-elapsed">00:00</span></span>
+        </div>
+        <div class="netcare-progress-actions" id="netcare-progress-actions">
+            <button type="button" id="netcare-progress-cancel" class="btn btn-secondary"
+                    style="padding: 0.35rem 0.7rem; font-size: 0.78rem;">Batalkan</button>
+            <button type="button" id="netcare-progress-dismiss" class="btn btn-secondary"
+                    style="padding: 0.35rem 0.7rem; font-size: 0.78rem;">Sembunyikan</button>
+        </div>
+    </div>
+</div>
+
+<!-- Section 2: Live MikroTik WAN Traffic -->
+<div class="section-divider" id="live-traffic-section">
+    <h2>Live WAN Traffic &middot; {{ uplink_name | default("Main Uplink") }}</h2>
+</div>
+
+<!-- Live Telemetry Row -->
+<div class="telemetry-grid">
+    <div class="metric-card">
+        <div class="metric-label">Router Status</div>
+        <div class="metric-value">
+            <span class="status-badge" id="telemetry-status">
+                <span class="status-dot {{ latest_status.lower() }}"></span>
+                {{ latest_status }}
+            </span>
+        </div>
+        <div class="metric-subtext">Uptime: <span id="telemetry-uptime">{{ latest_uptime or 'unknown' }}</span></div>
+    </div>
+
+    <div class="metric-card">
+        <div class="metric-label">Current Inbound (WAN)</div>
+        <div class="metric-value" style="color: #008800;" id="telemetry-inbound">{{ current_in_formatted }}</div>
+        <div class="metric-subtext">Incoming traffic rate</div>
+    </div>
+
+    <div class="metric-card">
+        <div class="metric-label">Current Outbound (WAN)</div>
+        <div class="metric-value" style="color: #0000CC;" id="telemetry-outbound">{{ current_out_formatted }}</div>
+        <div class="metric-subtext">Outgoing traffic rate</div>
+    </div>
+
+    <div class="metric-card">
+        <div class="metric-label">Last Polled</div>
+        <div class="metric-value" style="font-size: 1.1rem; padding-top: 0.25rem;" id="telemetry-time">
+            {{ latest_timestamp_wib }}
+        </div>
+        <div class="metric-subtext">Target: WAN ({{ uplink_name | default("Main Uplink") }})</div>
+    </div>
+</div>
+
+<!-- Controls / Date Filter Bar -->
+<div class="controls-card">
+    <div class="preset-group">
+        <span style="font-size: 0.8rem; font-weight: 700; color: var(--text-muted); margin-right: 0.25rem;">PRESET:</span>
+        <a href="/?preset=1h" class="preset-btn {% if active_preset == '1h' %}active{% endif %}">1 Hour</a>
+        <a href="/?preset=3h" class="preset-btn {% if active_preset == '3h' %}active{% endif %}">3 Hours</a>
+        <a href="/?preset=6h" class="preset-btn {% if active_preset == '6h' %}active{% endif %}">6 Hours</a>
+        <a href="/?preset=12h" class="preset-btn {% if active_preset == '12h' %}active{% endif %}">12 Hours</a>
+        <a href="/?preset=24h" class="preset-btn {% if active_preset == '24h' %}active{% endif %}">24 Hours</a>
+        <a href="/?preset=today" class="preset-btn {% if active_preset == 'today' %}active{% endif %}">Today</a>
+        <a href="/?preset=yesterday" class="preset-btn {% if active_preset == 'yesterday' %}active{% endif %}">Yesterday</a>
+        <a href="/?preset=7d" class="preset-btn {% if active_preset == '7d' %}active{% endif %}">7 Days</a>
+        <a href="/?preset=month" class="preset-btn {% if active_preset == 'month' %}active{% endif %}">This Month</a>
+        <button type="button" id="btn-fullday-modal" class="preset-btn {% if active_preset == 'fullday' %}active{% endif %}" title="Select full day (00:00 - 23:59) in 1 click">
+            📅 {% if active_preset == 'fullday' and fullday_val %}Day: {{ fullday_val }}{% else %}Select Day (24h){% endif %}
+        </button>
+        <input type="text" id="fullday-picker-hidden" style="position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none;">
+    </div>
+
+    <form method="GET" action="/" class="custom-range-form" id="custom-range-form">
+        <label for="start">From:</label>
+        <div class="input-time-wrapper">
+            <input type="text" id="start" name="start" value="{{ custom_start }}" placeholder="YYYY-MM-DD HH:MM" style="width: 175px;" readonly>
+            <button type="button" class="btn-open-matrix" data-target="start" title="Select Start Time">🕒</button>
+        </div>
+        <label for="end">To:</label>
+        <div class="input-time-wrapper">
+            <input type="text" id="end" name="end" value="{{ custom_end }}" placeholder="YYYY-MM-DD HH:MM" style="width: 175px;" readonly>
+            <button type="button" class="btn-open-matrix" data-target="end" title="Select End Time">🕒</button>
+        </div>
+        <button type="button" id="btn-quick-now" class="btn-now-shortcut" title="Set 'To' to current time">Now</button>
+        <button type="submit" class="btn btn-primary" style="padding: 0.35rem 0.75rem; font-size: 0.8rem;">Filter</button>
+    </form>
+
+    <div style="display: flex; align-items: center; gap: 0.4rem;">
+        <span class="status-badge" style="font-size: 0.8rem; color: var(--text-muted);">
+            <span class="status-dot up" style="width: 7px; height: 7px;"></span>
+            Live poll: 30s &middot; Auto-refresh: <span id="telemetry-countdown-timer">30</span>s
+        </span>
+        <button type="button" id="btn-refresh-all" class="btn btn-secondary"
+                style="padding: 0.35rem 0.7rem; font-size: 0.78rem;">Refresh All</button>
+    </div>
+</div>
+
+<!-- Graph Display Card -->
+<div class="card graph-card">
+    <div class="card-header">
+        <h2>{{ graph_title }}</h2>
+        <div class="graph-header-actions">
+            <a href="{{ export_png_url }}" download class="btn btn-secondary" style="padding: 0.35rem 0.7rem; font-size: 0.75rem;">Download PNG</a>
+            <a href="{{ export_excel_url }}" download class="btn btn-secondary" style="padding: 0.35rem 0.7rem; font-size: 0.75rem;">Download Excel</a>
+            <a href="{{ export_csv_url }}" download class="btn btn-secondary" style="padding: 0.35rem 0.7rem; font-size: 0.75rem;">Download CSV</a>
+        </div>
+    </div>
+    <div class="card-body">
+        <div class="graph-img-container">
+            <img src="{{ graph_img_url }}" alt="RRDtool Traffic Graph" class="graph-img" id="traffic-graph-img">
+        </div>
+    </div>
+</div>
+
+
+<!-- Matrix Time Selector Modal -->
+<div id="matrix-modal-backdrop" class="matrix-modal-backdrop" role="dialog" aria-modal="true">
+    <div class="matrix-modal">
+        <div class="matrix-modal-header">
+            <div class="matrix-modal-title">
+                <span>🕒</span>
+                <span id="matrix-modal-label">Select Date & Time</span>
+                <span id="matrix-preview-badge" class="matrix-selected-badge">2026-09-19 00:00</span>
+            </div>
+            <button type="button" id="matrix-close-btn" class="matrix-modal-close" aria-label="Close">&times;</button>
+        </div>
+        <div class="matrix-modal-body">
+            <!-- Shortcut Pills -->
+            <div>
+                <div class="matrix-col-title">Quick Time Shortcuts</div>
+                <div class="matrix-quick-pills">
+                    <button type="button" class="matrix-quick-pill" data-pill="00:00">00:00 (Start of Day)</button>
+                    <button type="button" class="matrix-quick-pill" data-pill="08:00">08:00 (Morning)</button>
+                    <button type="button" class="matrix-quick-pill" data-pill="12:00">12:00 (Noon)</button>
+                    <button type="button" class="matrix-quick-pill" data-pill="17:00">17:00 (Afternoon)</button>
+                    <button type="button" class="matrix-quick-pill" data-pill="23:59">23:59 (End of Day)</button>
+                    <button type="button" class="matrix-quick-pill" data-pill="now">Current Time (Now)</button>
+                </div>
+            </div>
+
+            <!-- Two Columns: Calendar + Hours/Minutes Matrix -->
+            <div class="matrix-grid-section">
+                <!-- Left Column: Date Calendar -->
+                <div>
+                    <div class="matrix-col-title">Select Date</div>
+                    <div id="matrix-inline-calendar"></div>
+                </div>
+
+                <!-- Right Column: Matrix Hours & Minutes -->
+                <div style="display: flex; flex-direction: column; gap: 0.85rem;">
+                    <div>
+                        <div class="matrix-col-title">Select Hour (24h)</div>
+                        <div class="matrix-hours-grid" id="matrix-hours-grid"></div>
+                    </div>
+                    <div>
+                        <div class="matrix-col-title">Select Minute (5-Min Step)</div>
+                        <div class="matrix-minutes-grid" id="matrix-minutes-grid"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="matrix-modal-footer">
+            <span style="font-size: 0.78rem; color: var(--text-muted);">
+                💡 Point & click without typing. Click "Apply Time" when finished.
+            </span>
+            <div style="display: flex; gap: 0.5rem;">
+                <button type="button" id="matrix-cancel-btn" class="preset-btn" style="padding: 0.35rem 0.75rem;">Cancel</button>
+                <button type="button" id="matrix-apply-btn" class="btn btn-primary" style="padding: 0.35rem 0.85rem; font-size: 0.82rem; font-weight: 700;">✓ Apply Time</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/flatpickr.min.js"></script>
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        // 1. Single-Click Full-Day Flatpickr
+        const fullDayHidden = document.getElementById('fullday-picker-hidden');
+        const fullDayBtn = document.getElementById('btn-fullday-modal');
+        if (typeof flatpickr !== 'undefined' && fullDayHidden && fullDayBtn) {
+            const fpFullDay = flatpickr(fullDayHidden, {
+                dateFormat: "Y-m-d",
+                positionElement: fullDayBtn,
+                onChange: function(selectedDates, dateStr) {
+                    if (dateStr) {
+                        window.location.href = '/?fullday=' + dateStr;
+                    }
+                }
+            });
+            fullDayBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                fpFullDay.open();
+            });
+        }
+
+        // 2. Instant "Now" button for "To" field
+        const btnQuickNow = document.getElementById('btn-quick-now');
+        const endInput = document.getElementById('end');
+        if (btnQuickNow && endInput) {
+            btnQuickNow.addEventListener('click', () => {
+                const now = new Date();
+                const pad = n => String(n).padStart(2, '0');
+                const nowStr = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+                endInput.value = nowStr;
+            });
+        }
+
+        // 3. Matrix Time Selector Modal
+        const modalBackdrop = document.getElementById('matrix-modal-backdrop');
+        const modalLabel = document.getElementById('matrix-modal-label');
+        const previewBadge = document.getElementById('matrix-preview-badge');
+        const hoursGrid = document.getElementById('matrix-hours-grid');
+        const minutesGrid = document.getElementById('matrix-minutes-grid');
+        const applyBtn = document.getElementById('matrix-apply-btn');
+        const cancelBtn = document.getElementById('matrix-cancel-btn');
+        const closeBtn = document.getElementById('matrix-close-btn');
+
+        let currentTargetInput = null;
+        let selectedDate = '';
+        let selectedHour = '00';
+        let selectedMinute = '00';
+        let inlineCalendar = null;
+
+        // Populate Hour Buttons (00-23)
+        const hours = Array.from({length: 24}, (_, i) => String(i).padStart(2, '0'));
+        if (hoursGrid) {
+            hours.forEach(h => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'matrix-btn matrix-hour-btn';
+                btn.textContent = h;
+                btn.dataset.hour = h;
+                btn.addEventListener('click', () => {
+                    selectedHour = h;
+                    renderMatrixActiveState();
+                    updatePreview();
+                });
+                hoursGrid.appendChild(btn);
+            });
+        }
+
+        // Populate Minute Buttons (00, 05, 10, ... 55, 59)
+        const minutes = ['00', '05', '10', '15', '20', '25', '30', '35', '40', '45', '50', '55', '59'];
+        if (minutesGrid) {
+            minutes.forEach(m => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'matrix-btn matrix-minute-btn';
+                btn.textContent = ':' + m;
+                btn.dataset.minute = m;
+                btn.addEventListener('click', () => {
+                    selectedMinute = m;
+                    renderMatrixActiveState();
+                    updatePreview();
+                });
+                btn.addEventListener('dblclick', () => {
+                    selectedMinute = m;
+                    applySelection();
+                });
+                minutesGrid.appendChild(btn);
+            });
+        }
+
+        function renderMatrixActiveState() {
+            document.querySelectorAll('.matrix-hour-btn').forEach(btn => {
+                if (btn.dataset.hour === selectedHour) {
+                    btn.classList.add('active');
+                } else {
+                    btn.classList.remove('active');
+                }
+            });
+            document.querySelectorAll('.matrix-minute-btn').forEach(btn => {
+                if (btn.dataset.minute === selectedMinute) {
+                    btn.classList.add('active');
+                } else {
+                    btn.classList.remove('active');
+                }
+            });
+        }
+
+        function updatePreview() {
+            if (previewBadge) {
+                previewBadge.textContent = `${selectedDate} ${selectedHour}:${selectedMinute}`;
+            }
+        }
+
+        function openMatrixModal(targetId) {
+            currentTargetInput = document.getElementById(targetId);
+            if (!currentTargetInput) return;
+
+            const isStart = targetId === 'start';
+            if (modalLabel) {
+                modalLabel.textContent = isStart ? 'Select Start Time (From)' : 'Select End Time (To)';
+            }
+
+            // Parse existing value or fallback to now
+            const val = (currentTargetInput.value || '').trim();
+            const pad = n => String(n).padStart(2, '0');
+            const now = new Date();
+            const todayStr = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}`;
+
+            if (val && val.includes(' ')) {
+                const parts = val.split(' ');
+                selectedDate = parts[0];
+                if (parts[1] && parts[1].includes(':')) {
+                    const timeParts = parts[1].split(':');
+                    selectedHour = pad(parseInt(timeParts[0], 10) || 0);
+                    selectedMinute = pad(parseInt(timeParts[1], 10) || 0);
+                } else {
+                    selectedHour = '00';
+                    selectedMinute = '00';
+                }
+            } else {
+                selectedDate = todayStr;
+                selectedHour = pad(now.getHours());
+                selectedMinute = pad(Math.floor(now.getMinutes() / 5) * 5);
+            }
+
+            // Initialize or update inline Flatpickr calendar
+            const calendarEl = document.getElementById('matrix-inline-calendar');
+            if (calendarEl && typeof flatpickr !== 'undefined') {
+                if (inlineCalendar) {
+                    inlineCalendar.setDate(selectedDate, false);
+                } else {
+                    inlineCalendar = flatpickr(calendarEl, {
+                        inline: true,
+                        dateFormat: "Y-m-d",
+                        defaultDate: selectedDate,
+                        onChange: function(selectedDates, dateStr) {
+                            if (dateStr) {
+                                selectedDate = dateStr;
+                                updatePreview();
+                            }
+                        }
+                    });
+                }
+            }
+
+            renderMatrixActiveState();
+            updatePreview();
+
+            if (modalBackdrop) {
+                modalBackdrop.classList.add('open');
+            }
+        }
+
+        function closeMatrixModal() {
+            if (modalBackdrop) {
+                modalBackdrop.classList.remove('open');
+            }
+        }
+
+        function applySelection() {
+            if (currentTargetInput) {
+                currentTargetInput.value = `${selectedDate} ${selectedHour}:${selectedMinute}`;
+            }
+            closeMatrixModal();
+        }
+
+        // Quick pills click handler
+        document.querySelectorAll('.matrix-quick-pill').forEach(pill => {
+            pill.addEventListener('click', () => {
+                const type = pill.dataset.pill;
+                const pad = n => String(n).padStart(2, '0');
+                if (type === 'now') {
+                    const now = new Date();
+                    selectedDate = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}`;
+                    selectedHour = pad(now.getHours());
+                    selectedMinute = pad(now.getMinutes());
+                    if (inlineCalendar) inlineCalendar.setDate(selectedDate, false);
+                } else if (type.includes(':')) {
+                    const parts = type.split(':');
+                    selectedHour = parts[0];
+                    selectedMinute = parts[1];
+                }
+                renderMatrixActiveState();
+                updatePreview();
+            });
+        });
+
+        // Trigger buttons and inputs to open modal
+        document.querySelectorAll('.btn-open-matrix').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                openMatrixModal(btn.dataset.target);
+            });
+        });
+
+        const startInp = document.getElementById('start');
+        if (startInp) {
+            startInp.addEventListener('click', () => openMatrixModal('start'));
+        }
+        if (endInput) {
+            endInput.addEventListener('click', () => openMatrixModal('end'));
+        }
+
+        if (applyBtn) applyBtn.addEventListener('click', applySelection);
+        if (cancelBtn) cancelBtn.addEventListener('click', closeMatrixModal);
+        if (closeBtn) closeBtn.addEventListener('click', closeMatrixModal);
+
+        if (modalBackdrop) {
+            modalBackdrop.addEventListener('click', (e) => {
+                if (e.target === modalBackdrop) closeMatrixModal();
+            });
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && modalBackdrop && modalBackdrop.classList.contains('open')) {
+                closeMatrixModal();
+            }
+        });
+
+        // Live telemetry poll: 30s. Netcare page auto-refresh: 300s (FR-13.1).
+        const TELEMETRY_POLL_SECONDS = 30;
+        const NETCARE_REFRESH_SECONDS = {{ netcare_refresh_seconds | default(180) }};
+
+        const telemetryCountdownEl = document.getElementById('telemetry-countdown-timer');
+        const netcareCountdownEl = document.getElementById('countdown-timer');
+        let telemetrySecondsLeft = TELEMETRY_POLL_SECONDS;
+        let netcareSecondsLeft = NETCARE_REFRESH_SECONDS;
+
+        function triggerTelemetryRefresh() {
+            const img = document.getElementById('traffic-graph-img');
+            if (img) {
+                const currentSrc = new URL(img.src);
+                currentSrc.searchParams.set('_t', new Date().getTime());
+                img.src = currentSrc.toString();
+            }
+
+            fetch('/api/telemetry')
+                .then(r => r.json())
+                .then(data => {
+                    if (!data) return;
+                    const inEl = document.getElementById('telemetry-inbound');
+                    const outEl = document.getElementById('telemetry-outbound');
+                    const upEl = document.getElementById('telemetry-uptime');
+                    const timeEl = document.getElementById('telemetry-time');
+
+                    if (inEl) inEl.innerText = data.current_in_formatted;
+                    if (outEl) outEl.innerText = data.current_out_formatted;
+                    if (upEl) upEl.innerText = data.uptime || 'unknown';
+                    if (timeEl) timeEl.innerText = data.latest_timestamp_wib;
+                })
+                .catch(err => console.error("Telemetry refresh error:", err));
+        }
+
+        // --- Netcare branch grid (FR-13.2 / FR-13.3) ---
+        const netcareModal = document.getElementById('netcare-modal');
+        const netcareCards = Array.from(document.querySelectorAll('.netcare-card'));
+        const netcareEmptyMessage = document.getElementById('netcare-empty-message');
+        let activeNetcareCard = null;
+        // Region and service are independent selections; neither click resets
+        // the other, which is what makes the two pill rows compose.
+        let netcareRegionFilter = 'ALL';
+        let netcareServiceFilter = 'ALL';
+
+        function relativeAge(isoTimestamp) {
+            if (!isoTimestamp) return 'Never scraped';
+            const parsed = new Date(isoTimestamp);
+            if (isNaN(parsed.getTime())) return 'Never scraped';
+            const seconds = Math.max(0, Math.floor((Date.now() - parsed.getTime()) / 1000));
+            if (seconds < 60) return `Updated ${seconds}s ago`;
+            const minutes = Math.floor(seconds / 60);
+            if (minutes < 60) return `Updated ${minutes}m ago`;
+            const hours = Math.floor(minutes / 60);
+            if (hours < 24) return `Updated ${hours}h ago`;
+            return `Updated ${Math.floor(hours / 24)}d ago`;
+        }
+
+        function applyNetcareFilters() {
+            // Both axes narrow the same grid: a card is shown only when it
+            // satisfies the region and the service selection together, so the
+            // two pill rows compose instead of overwriting each other.
+            let visible = 0;
+            netcareCards.forEach(card => {
+                const regionMatch = netcareRegionFilter === 'ALL'
+                    || card.dataset.region === netcareRegionFilter;
+                const serviceMatch = netcareServiceFilter === 'ALL'
+                    || card.dataset.service === netcareServiceFilter;
+                const match = regionMatch && serviceMatch;
+                card.style.display = match ? '' : 'none';
+                if (match) visible += 1;
+            });
+            if (netcareEmptyMessage) {
+                netcareEmptyMessage.style.display = visible === 0 ? 'block' : 'none';
+            }
+            document.querySelectorAll('#netcare-filter-pills .netcare-pill').forEach(pill => {
+                pill.classList.toggle('active', pill.dataset.region === netcareRegionFilter);
+            });
+            document.querySelectorAll('#netcare-service-filter .netcare-pill').forEach(pill => {
+                pill.classList.toggle('active', pill.dataset.service === netcareServiceFilter);
+            });
+        }
+
+        function applyRegionFilter(region) {
+            netcareRegionFilter = region;
+            applyNetcareFilters();
+        }
+
+        function applyServiceFilter(service) {
+            netcareServiceFilter = service;
+            applyNetcareFilters();
+        }
+
+        // A card image URL may already carry a day partition (`?day=2026-09-20`),
+        // so a parameter is joined with `&` rather than a second `?`.
+        function netcareImageSrc(url, param) {
+            if (!url) return '';
+            const base = String(url);
+            return `${base}${base.includes('?') ? '&' : '?'}${param}`;
+        }
+
+        function renderNetcare(data) {
+            if (!data || !Array.isArray(data.targets)) return;
+            const byTarget = {};
+            data.targets.forEach(t => { byTarget[t.target] = t; });
+
+            netcareCards.forEach(card => {
+                const entry = byTarget[card.dataset.target];
+                if (!entry) return;
+                card.dataset.status = entry.status;
+
+                const img = card.querySelector('.netcare-card-image');
+                const missing = card.querySelector('.netcare-card-image-missing');
+                const stamp = Date.now();
+                if (entry.has_image && img) {
+                    img.src = netcareImageSrc(entry.image_url, `t=${stamp}`);
+                    img.style.display = '';
+                    if (missing) missing.style.display = 'none';
+                } else {
+                    if (img) img.style.display = 'none';
+                    if (missing) missing.style.display = 'flex';
+                }
+
+                const ageEl = card.querySelector('.netcare-age');
+                if (ageEl) {
+                    ageEl.textContent = relativeAge(entry.last_scraped_at);
+                    ageEl.dataset.scrapedAt = entry.last_scraped_at || '';
+                }
+            });
+
+            const modalImg = document.getElementById('netcare-modal-image');
+            if (activeNetcareCard && modalImg && netcareModal.classList.contains('open')) {
+                const entry = byTarget[activeNetcareCard.dataset.target];
+                if (entry && entry.has_image) {
+                    modalImg.src = netcareImageSrc(entry.image_url, `t=${stamp}`);
+                }
+            }
+        }
+
+        function loadNetcare(day) {
+            const suffix = day ? `?day=${encodeURIComponent(day)}` : '';
+            return fetch(`/api/netcare/targets${suffix}`)
+                .then(r => r.json())
+                .then(renderNetcare)
+                .catch(err => console.error("Netcare refresh error:", err));
+        }
+
+        function openNetcareModal(card) {
+            activeNetcareCard = card;
+            const hasImage = card.dataset.hasImage === 'true';
+            document.getElementById('netcare-modal-title').textContent = card.dataset.name;
+            document.getElementById('netcare-modal-target').textContent = card.dataset.target;
+            document.getElementById('netcare-modal-type').textContent = card.dataset.type;
+            document.getElementById('netcare-modal-address').textContent = card.dataset.address;
+            document.getElementById('netcare-modal-status').textContent = `status: ${card.dataset.status}`;
+
+            const modalImg = document.getElementById('netcare-modal-image');
+            modalImg.src = hasImage ? netcareImageSrc(card.dataset.imageUrl, `t=${Date.now()}`) : '';
+            modalImg.style.display = hasImage ? 'block' : 'none';
+
+            const download = document.getElementById('netcare-modal-download');
+            download.href = hasImage ? netcareImageSrc(card.dataset.imageUrl, 'download=1') : '#';
+            download.style.display = hasImage ? 'inline-flex' : 'none';
+
+            document.getElementById('netcare-modal-refresh').dataset.target = card.dataset.target;
+            netcareModal.classList.add('open');
+        }
+
+        function closeNetcareModal() {
+            netcareModal.classList.remove('open');
+            activeNetcareCard = null;
+        }
+
+        document.querySelectorAll('#netcare-filter-pills .netcare-pill').forEach(pill => {
+            pill.addEventListener('click', () => applyRegionFilter(pill.dataset.region));
+        });
+
+        document.querySelectorAll('#netcare-service-filter .netcare-pill').forEach(pill => {
+            pill.addEventListener('click', () => applyServiceFilter(pill.dataset.service));
+        });
+
+        netcareCards.forEach(card => {
+            card.addEventListener('click', () => openNetcareModal(card));
+            card.addEventListener('keydown', event => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    openNetcareModal(card);
+                }
+            });
+        });
+
+        document.getElementById('netcare-modal-close').addEventListener('click', closeNetcareModal);
+        netcareModal.addEventListener('click', event => {
+            if (event.target === netcareModal) closeNetcareModal();
+        });
+        document.addEventListener('keydown', event => {
+            if (event.key === 'Escape' && netcareModal.classList.contains('open')) {
+                closeNetcareModal();
+            }
+        });
+
+        document.getElementById('netcare-modal-refresh').addEventListener('click', event => {
+            const targetId = event.currentTarget.dataset.target;
+            if (!targetId) return;
+            openNetcareProgress();
+            fetch(`/api/netcare/refresh/${encodeURIComponent(targetId)}`, { method: 'POST' })
+                .then(() => loadNetcare(netcareActiveDay))
+                .then(() => finishNetcareProgress('done', 'Cabang dijadwalkan untuk pengambilan berikutnya.'))
+                .catch(err => {
+                    console.error("Netcare priority refresh error:", err);
+                    finishNetcareProgress('failed', `Gagal menjadwalkan cabang: ${err.message}`);
+                });
+        });
+
+        document.getElementById('netcare-refresh-all').addEventListener('click', () => {
+            loadNetcare(netcareActiveDay);
+            netcareSecondsLeft = NETCARE_REFRESH_SECONDS;
+            runNetcareQuery(netcareActivePreset === 'custom' ? 'custom' : netcareActivePreset,
+                netcareStartInput ? netcareStartInput.value : '',
+                netcareEndInput ? netcareEndInput.value : '');
+        });
+
+        // --- Netcare time-range toolbar + live loading dialog (FR-15.2 / FR-15.3) ---
+        const netcareProgressBackdrop = document.getElementById('netcare-progress-backdrop');
+        const netcareProgressSpinner = document.getElementById('netcare-progress-spinner');
+        const netcareProgressTitle = document.getElementById('netcare-progress-title');
+        const netcareProgressSub = document.getElementById('netcare-progress-sub');
+        const netcareProgressBar = document.getElementById('netcare-progress-bar');
+        const netcareProgressCount = document.getElementById('netcare-progress-count');
+        const netcareProgressStage = document.getElementById('netcare-progress-stage');
+        const netcareProgressElapsed = document.getElementById('netcare-progress-elapsed');
+        const netcareProgressActions = document.getElementById('netcare-progress-actions');
+        const netcarePresetButtons = Array.from(document.querySelectorAll('.netcare-preset'));
+        const netcareRangeForm = document.getElementById('netcare-range-form');
+        const netcareStartInput = document.getElementById('netcare-start');
+        const netcareEndInput = document.getElementById('netcare-end');
+        const netcareCachedPill = document.getElementById('netcare-cached-pill');
+        const NETCARE_TOTAL = {{ netcare_total | default(0) }};
+
+        let netcareActivePreset = 'today';
+        let netcareActiveDay = '';
+        let netcareJobId = null;
+        let netcarePollTimer = null;
+        let netcareTickerTimer = null;
+        let netcareElapsed = 0;
+
+        function formatClock(seconds) {
+            const value = Math.max(0, Math.round(seconds));
+            const minutes = Math.floor(value / 60);
+            const rest = value % 60;
+            return `${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}`;
+        }
+
+        function setNetcareElapsed() {
+            netcareProgressElapsed.textContent = formatClock(netcareElapsed);
+        }
+
+        function setNetcareStage(stage) {
+            if (stage) netcareProgressStage.textContent = stage;
+        }
+
+        function setNetcareProgress(completed, total) {
+            const safeTotal = total > 0 ? total : 1;
+            const percent = Math.min(100, Math.round((completed / safeTotal) * 100));
+            netcareProgressBar.style.width = `${percent}%`;
+            netcareProgressBar.setAttribute('aria-valuenow', String(percent));
+            netcareProgressCount.textContent = `${completed} / ${total} cabang selesai`;
+        }
+
+        function openNetcareProgress() {
+            netcareElapsed = 0;
+            netcareProgressSpinner.className = 'netcare-spinner';
+            netcareProgressSpinner.textContent = '';
+            netcareProgressBar.className = 'netcare-progress-bar';
+            netcareProgressTitle.textContent = 'Mengambil data grafik dari TelkomCare...';
+            netcareProgressSub.textContent = 'Mohon tunggu sebentar, halaman tetap bisa digunakan.';
+            netcareProgressStage.textContent = 'Menyiapkan...';
+            netcareProgressActions.style.display = 'flex';
+            setNetcareProgress(0, NETCARE_TOTAL);
+            setNetcareElapsed();
+            netcareProgressBackdrop.classList.add('open');
+            netcareTickerTimer = setInterval(() => {
+                netcareElapsed += 1;
+                setNetcareElapsed();
+            }, 1000);
+        }
+
+        function closeNetcareProgress() {
+            netcareProgressBackdrop.classList.remove('open');
+            stopNetcarePolling();
+            netcareJobId = null;
+            if (netcareTickerTimer) { clearInterval(netcareTickerTimer); netcareTickerTimer = null; }
+        }
+
+        function cancelNetcareQuery() {
+            if (!netcareJobId) { closeNetcareProgress(); return; }
+            const jobId = netcareJobId;
+            stopNetcarePolling();
+            netcareJobId = null;
+            fetch(`/api/netcare/cancel?job_id=${encodeURIComponent(jobId)}`, { method: 'POST' })
+                .then(() => finishNetcareProgress('failed', 'Pengambilan data dibatalkan operator.'))
+                .catch(() => finishNetcareProgress('failed', 'Gagal membatalkan pengambilan data.'));
+        }
+
+        function stopNetcarePolling() {
+            if (netcarePollTimer) { clearTimeout(netcarePollTimer); netcarePollTimer = null; }
+        }
+
+        function finishNetcareProgress(state, message) {
+            netcareProgressSpinner.className = `netcare-spinner ${state}`;
+            netcareProgressSpinner.textContent = state === 'done' ? '✓' : '!';
+            netcareProgressBar.className = `netcare-progress-bar ${state}`;
+            netcareProgressTitle.textContent = state === 'done'
+                ? 'Data grafik TelkomCare siap'
+                : 'Pengambilan data terhenti';
+            netcareProgressSub.textContent = message;
+            netcareProgressActions.style.display = 'none';
+            setNetcareProgress(state === 'done' ? NETCARE_TOTAL : 0, NETCARE_TOTAL);
+            // Auto-dismiss after 1 second (FR-15.3).
+            setTimeout(closeNetcareProgress, 1000);
+        }
+
+        function pollNetcareStatus() {
+            if (!netcareJobId) return;
+            fetch(`/api/netcare/status?job_id=${encodeURIComponent(netcareJobId)}`)
+                .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+                .then(data => {
+                    setNetcareStage(data.stage);
+                    setNetcareProgress(data.completed, data.total);
+                    if (data.running) {
+                        netcarePollTimer = setTimeout(pollNetcareStatus, 1000);
+                        return;
+                    }
+                    if (data.cancelled) {
+                        finishNetcareProgress('failed', 'Pengambilan data dibatalkan operator.');
+                        netcareJobId = null;
+                        return;
+                    }
+                    netcareActiveDay = data.image_url_day || '';
+                    loadNetcare(netcareActiveDay);
+                    if (data.error) {
+                        finishNetcareProgress('failed', `Gagal: ${data.error}`);
+                    } else {
+                        finishNetcareProgress('done', 'Semua grafik telah diperbarui.');
+                    }
+                    netcareJobId = null;
+                })
+                .catch(err => {
+                    finishNetcareProgress('failed', `Gagal menghubungi server: ${err.message}`);
+                    netcareJobId = null;
+                });
+        }
+
+        function runNetcareQuery(preset, startValue, endValue) {
+            const payload = { preset: preset || 'today' };
+            if (preset === 'custom') {
+                payload.start = startValue;
+                payload.end = endValue;
+            }
+            openNetcareProgress();
+            fetch('/api/netcare/query', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            })
+                .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+                .then(data => {
+                    netcareJobId = data.job_id;
+                    setNetcareStage(data.stage);
+                    setNetcareProgress(data.completed || 0, data.total || NETCARE_TOTAL);
+                    pollNetcareStatus();
+                })
+                .catch(err => finishNetcareProgress('failed', `Gagal memulai pengambilan data: ${err.message}`));
+        }
+
+        function activateNetcarePreset(preset) {
+            netcareActivePreset = preset;
+            netcarePresetButtons.forEach(button => {
+                button.classList.toggle('active', button.dataset.preset === preset);
+            });
+        }
+
+        function markNetcareCachedDay(day) {
+            if (!netcareCachedPill) return;
+            if (!day) {
+                netcareCachedPill.hidden = true;
+                netcareCachedPill.textContent = '';
+                netcareCachedPill.classList.remove('active');
+                return;
+            }
+            netcareCachedPill.hidden = false;
+            netcareCachedPill.classList.toggle('active', day === netcareActiveDay);
+            netcareCachedPill.textContent = `⚡ ${day}`;
+            netcareCachedPill.dataset.day = day;
+        }
+
+        netcarePresetButtons.forEach(button => {
+            button.addEventListener('click', () => {
+                const preset = button.dataset.preset;
+                activateNetcarePreset(preset);
+                if (preset === 'fullday') {
+                    document.getElementById('btn-fullday-modal').click();
+                    return;
+                }
+                runNetcareQuery(preset);
+            });
+        });
+
+        if (netcareRangeForm) {
+            netcareRangeForm.addEventListener('submit', event => {
+                event.preventDefault();
+                activateNetcarePreset('custom');
+                runNetcareQuery('custom', netcareStartInput.value, netcareEndInput.value);
+            });
+        }
+
+        const netcareNowBtn = document.getElementById('netcare-btn-now');
+        if (netcareNowBtn && netcareEndInput) {
+            netcareNowBtn.addEventListener('click', () => {
+                const now = new Date();
+                const pad = n => String(n).padStart(2, '0');
+                netcareEndInput.value =
+                    `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ` +
+                    `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+                if (!netcareStartInput.value) {
+                    const start = new Date(now.getTime() - 6 * 60 * 60 * 1000);
+                    netcareStartInput.value =
+                        `${start.getFullYear()}-${pad(start.getMonth() + 1)}-${pad(start.getDate())} ` +
+                        `${pad(start.getHours())}:${pad(start.getMinutes())}`;
+                }
+            });
+        }
+
+        if (netcareCachedPill) {
+            netcareCachedPill.addEventListener('click', () => {
+                const day = netcareCachedPill.dataset.day;
+                if (!day) return;
+                netcareActiveDay = day;
+                markNetcareCachedDay(day);
+                loadNetcare(day);
+            });
+        }
+
+        document.getElementById('netcare-progress-cancel').addEventListener('click', cancelNetcareQuery);
+        document.getElementById('netcare-progress-dismiss').addEventListener('click', closeNetcareProgress);
+
+        markNetcareCachedDay({{ netcare_partitions | tojson }}[0] || '');
+
+        const btnRefreshAll = document.getElementById('btn-refresh-all');
+        if (btnRefreshAll) {
+            btnRefreshAll.addEventListener('click', () => {
+                triggerTelemetryRefresh();
+                loadNetcare(netcareActiveDay);
+                telemetrySecondsLeft = TELEMETRY_POLL_SECONDS;
+                netcareSecondsLeft = NETCARE_REFRESH_SECONDS;
+            });
+        }
+
+        // Prime relative age badges and cache-bust the cached graph thumbnails.
+        netcareCards.forEach(card => {
+            const ageEl = card.querySelector('.netcare-age');
+            if (ageEl) ageEl.textContent = relativeAge(ageEl.dataset.scrapedAt);
+            const img = card.querySelector('.netcare-card-image');
+            if (img) {
+                img.src = img.src.split('?')[0] + '?t=' + Date.now();
+            }
+        });
+
+        setInterval(() => {
+            telemetrySecondsLeft -= 1;
+            if (telemetrySecondsLeft <= 0) {
+                telemetrySecondsLeft = TELEMETRY_POLL_SECONDS;
+                triggerTelemetryRefresh();
+            }
+            if (telemetryCountdownEl) {
+                telemetryCountdownEl.textContent = telemetrySecondsLeft;
+            }
+
+            netcareSecondsLeft -= 1;
+            if (netcareSecondsLeft <= 0) {
+                netcareSecondsLeft = NETCARE_REFRESH_SECONDS;
+                loadNetcare();
+            }
+            if (netcareCountdownEl) {
+                netcareCountdownEl.textContent = netcareSecondsLeft;
+            }
+        }, 1000);
+    });
+</script>
+{% endblock %}

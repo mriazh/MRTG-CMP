@@ -1,5 +1,8 @@
 {% extends "base.html" %}
 
+{% block nav_console %}active{% endblock %}
+{% block nav_mrtg %}{% endblock %}
+
 {% block title %}Router Console - {{ app_title | default("MRTG Traffic Monitor") }}{% endblock %}
 
 {% block extra_styles %}

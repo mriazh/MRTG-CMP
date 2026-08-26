@@ -1,4 +1,4 @@
-# MRTG-Poncab
+# MRTG-CMP
 
 Enterprise-grade network traffic monitoring, historical analysis, and reporting system for MikroTik RouterOS branch gateways.
 
@@ -107,7 +107,7 @@ ADMIN_PASSWORD="ChangeMeImmediately123!"
 ### 2. Setup Environment
 ```powershell
 # Clone or navigate to the repository
-cd MRTG-Poncab
+cd MRTG-CMP
 
 # Install all project and development dependencies
 uv sync --all-extras
@@ -118,19 +118,19 @@ cp .env.example .env
 
 ### 3. Initialize Database & Admin User
 ```powershell
-uv run mrtg-poncab init-db
+uv run mrtg-cmp init-db
 ```
 *(Default user: `admin` / `admin123`)*
 
 To create or update a user password:
 ```powershell
-uv run mrtg-poncab create-user --username engineer --password "YourPassword!"
+uv run mrtg-cmp create-user --username engineer --password "YourPassword!"
 ```
 
 ### 4. Run the Application Locally
 To run both the background collector and the web server together:
 ```powershell
-uv run mrtg-poncab all --port 8000
+uv run mrtg-cmp all --port 8000
 ```
 Open your browser and navigate to: `http://localhost:8000`
 
@@ -160,8 +160,8 @@ source $HOME/.local/bin/env
 ### 2. Deploy Project Directory
 ```bash
 cd /home/mriazh
-git clone https://github.com/mriazh/MRTG-Poncab.git
-cd MRTG-Poncab
+git clone https://github.com/mriazh/MRTG-CMP.git
+cd MRTG-CMP
 
 # Install production dependencies
 uv sync --no-dev
@@ -169,20 +169,37 @@ cp .env.example .env
 nano .env  # configure actual router password and secret key
 
 # Initialize database
-uv run mrtg-poncab init-db
+uv run mrtg-cmp init-db
 
 # Make automated deployment script executable
 chmod +x deploy.sh
 ```
 
 ### 3. Install Systemd Services (Auto-Run on Reboot)
-Install the production-grade split services (separate web worker and collector daemon):
+The standardized `mrtg-cmp-*` units ship with `@APP_DIR@` / `@APP_USER@` placeholders that
+`deploy.sh` substitutes at install time, so the same units work on any checkout path:
 ```bash
-sudo cp systemd/mrtg-poncab-collector.service /etc/systemd/system/
-sudo cp systemd/mrtg-poncab-web.service /etc/systemd/system/
+sudo sed -e "s|@APP_DIR@|$PWD|g" -e "s|@APP_USER@|$(id -un)|g" \
+    systemd/mrtg-cmp-collector.service | sudo tee /etc/systemd/system/mrtg-cmp-collector.service
+sudo sed -e "s|@APP_DIR@|$PWD|g" -e "s|@APP_USER@|$(id -un)|g" \
+    systemd/mrtg-cmp-web.service | sudo tee /etc/systemd/system/mrtg-cmp-web.service
+sudo sed -e "s|@APP_DIR@|$PWD|g" -e "s|@APP_USER@|$(id -un)|g" \
+    systemd/mrtg-cmp-netcare.service | sudo tee /etc/systemd/system/mrtg-cmp-netcare.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now mrtg-poncab-collector.service
-sudo systemctl enable --now mrtg-poncab-web.service
+sudo systemctl enable --now mrtg-cmp-collector.service
+sudo systemctl enable --now mrtg-cmp-web.service
+sudo systemctl enable --now mrtg-cmp-netcare.service
+```
+
+| Unit | Runs | Purpose |
+| :--- | :--- | :--- |
+| `mrtg-cmp-web.service` | `python -m mrtg_cmp web` | Unified dashboard + API |
+| `mrtg-cmp-collector.service` | `python -m mrtg_cmp collect` | MikroTik WAN polling every 30s |
+| `mrtg-cmp-netcare.service` | `python -m mrtg_cmp netcare` | TelkomCare branch graph scraper every 5 min |
+
+The Netcare unit needs Google Chrome (or Chromium) installed for headless graph capture:
+```bash
+sudo apt install -y chromium
 ```
 
 ### 4. Firewall & Network Access
@@ -201,17 +218,121 @@ Whenever updates are pushed from development, update the production server with 
 ```bash
 ./deploy.sh
 ```
-This script pulls the latest git commits, syncs Python packages, and restarts the services within **~0.2 seconds** without losing traffic data or dropping user web sessions.
+This script pulls the latest git commits, syncs Python packages, stops and disables the legacy
+`mrtg-poncab-*` units if they are installed, renders the `mrtg-cmp-*` units for the current
+checkout path, then enables and restarts all three services. Traffic data and web sessions
+are preserved.
 
 ### 6. Service Health & Logs
 ```bash
 # Check service statuses
-sudo systemctl status mrtg-poncab-web.service
-sudo systemctl status mrtg-poncab-collector.service
+sudo systemctl status mrtg-cmp-web.service
+sudo systemctl status mrtg-cmp-collector.service
+sudo systemctl status mrtg-cmp-netcare.service
 
 # Stream live collector logs
-sudo journalctl -u mrtg-poncab-collector.service -f
+sudo journalctl -u mrtg-cmp-collector.service -f
+
+# Stream Netcare scraper logs (login, CAPTCHA rotation, capture status)
+sudo journalctl -u mrtg-cmp-netcare.service -f
 ```
+
+---
+
+## TelkomCare Netcare Scraper
+
+The scraper automates the TelkomCare MRTG portal so branch graphs appear on the same
+dashboard as the live MikroTik telemetry.
+
+### How It Works
+1. **Login** — a persistent Chrome profile plus an exported `cookies.json` keep the portal
+   session alive. Gemini Vision is only called when the cookies have expired.
+2. **CAPTCHA failover** — the 3-character login CAPTCHA is solved through the Gemini Vision
+   API. `GEMINI_API_KEYS` rotates to the next key on HTTP 429, and `GEMINI_MODELS` falls back
+   through the configured model list. Failover is bounded: each request times out after at
+   most 6s, and a model answering HTTP 404 or 503 is unavailable rather than busy, so it is
+   blacklisted for the rest of the session and skipped instantly on later CAPTCHAs.
+3. **MFA** — a 6-digit code is generated from `TOTP_SECRET` with `pyotp`, so login is fully
+   unattended.
+4. **Capture** — each target is filtered to the requested range (today's window by
+   default, `00:00` to `23:55`), the `graph.php` image is isolated via injected
+   JavaScript, and only that element is screenshotted. Targets are captured in
+   parallel by the worker pool, each worker owning its own browser session.
+5. **Validation & storage** — every capture is checked with Pillow (rejecting blank, solid,
+   and "no graph" placeholders), then atomically replaces `data/netcare_cache/{target}.png`
+   (or the day partition for a past range). Manifest read-modify-writes and temp-file swaps
+   run under a lock, so concurrent workers cannot lose each other's status updates. The live
+   cache holds exactly one image per target, so it stays under ~2 MB and no images are stored
+   in SQLite.
+6. **Resilience** — a failed target never deletes its previous image; the status manifest
+   records it as `stale` so the dashboard keeps showing the last good graph.
+
+### Dashboard Integration
+- **Regional filters**: All (18), CGK Area (7), Surabaya (2), Makassar (4),
+  Denpasar (2), Balikpapan (1), Sentul VPN (2).
+- **Branch cards**: branch name, target ID, physical address, relative update badge
+  (`Updated 3m ago`), and status indicator.
+- **Click to zoom**: full-resolution modal with metadata and a PNG download button.
+- **Auto-refresh**: the page reloads Netcare data every 5 minutes with a visible countdown
+  and a manual "Refresh All" button. MikroTik live polling stays at 30 seconds.
+- **Reserved nav**: `/orbit` is a placeholder for the upcoming Telkomsel Orbit modem page.
+
+### Time Range Selection
+The Netcare section has its own toolbar, mirroring the MikroTik one so both mean
+the same thing:
+
+- **Presets**: 1 Hour, 3 Hours, 6 Hours, 12 Hours, 24 Hours, Today, Yesterday,
+  7 Days, This Month, and Select Day (24h).
+- **Custom range**: `From` / `To` inputs with a `Now` shortcut and a `Filter` action.
+
+Picking one opens a non-blocking loading dialog showing an animated spinner, a live
+progress bar (`x / 18 cabang selesai`), and a countdown estimate. The scrape runs in
+the background so the rest of the page stays usable; the dialog switches to a green
+checkmark and closes itself a second after the last branch lands.
+
+### Parallel Worker Pool
+Each scrape round fans out over `NETCARE_WORKERS` threads (default `3`), with targets
+split into balanced buckets — 18 branches become 6/6/6. Each worker drives its own
+browser session, so a full round drops from roughly 150 seconds to about 45. Raise it
+toward 8 on a host with spare memory, since each worker adds a Chrome process.
+
+### Running It
+```bash
+# One-off round (repeatable for testing)
+uv run mrtg-cmp netcare -n 1
+
+# Continuous daemon
+uv run mrtg-cmp netcare
+```
+
+### Configuration
+All settings live in `.env` (documented in `.env.example`). At minimum set
+`GEMINI_API_KEYS`, `TELKOM_USER`, `TELKOM_PASSWORD`, and `TOTP_SECRET` to enable auto-login.
+
+Deployments holding the full master list can point `NETCARE_CATALOG_FILE` at a CSV export
+with the columns `type,target,name,address,region,ocr_enabled,service_type` to replace the
+built-in branch names and addresses at runtime. The committed
+`config/netcare_targets.csv.example` documents that format with 18 anonymous circuits
+(`target-001` through `target-018`); copy it to `config/netcare_targets.csv` and fill in your
+own circuits. That file is gitignored, because it names your portal circuit ids, branch names,
+and facility addresses.
+
+### Storage Layout
+```
+data/netcare_cache/
+├── target-001.png       # one latest graph per target
+├── target-018.png
+├── status.json              # per-target status, timestamp, error, file size
+├── 2026-09-20/              # historical day partition, written on demand
+│   ├── target-001.png
+│   └── ...
+└── status_2026-09-20.json   # that day's status manifest
+```
+
+A time range that reaches into the past is captured into its own `YYYY-MM-DD`
+partition instead of overwriting the live graph. Picking that day again serves it
+straight from disk, so a repeat lookup is instant. The current day always stays
+flat and always re-captures, because it is the "latest" view.
 
 ---
 
@@ -219,11 +340,14 @@ sudo journalctl -u mrtg-poncab-collector.service -f
 
 | Command | Description | Example |
 | :--- | :--- | :--- |
-| `init-db` | Create SQLite schema and seed administrator | `mrtg-poncab init-db` |
-| `create-user` | Create or update a dashboard user | `mrtg-poncab create-user -u engineer -p pass` |
-| `collect` | Run background traffic collection loop | `mrtg-poncab collect --interval 300` |
-| `web` | Start FastAPI web server | `mrtg-poncab web --host 0.0.0.0 --port 8000` |
-| `all` | Run collector and web server concurrently | `mrtg-poncab all --port 8000` |
+| `init-db` | Create SQLite schema and seed administrator | `mrtg-cmp init-db` |
+| `create-user` | Create or update a dashboard user | `mrtg-cmp create-user -u engineer -p pass` |
+| `collect` | Run background traffic collection loop | `mrtg-cmp collect --interval 300` |
+| `web` | Start FastAPI web server | `mrtg-cmp web --host 0.0.0.0 --port 8000` |
+| `netcare` | Run the TelkomCare branch graph scraper daemon | `mrtg-cmp netcare` |
+| `netcare` (one round) | Scrape all branch graphs once | `mrtg-cmp netcare -n 1` |
+| `all` | Run collector and web server concurrently | `mrtg-cmp all --port 8000` |
+| `all` (with scraper) | Also run the Netcare daemon in a thread | `mrtg-cmp all --with-netcare` |
 
 ---
 
