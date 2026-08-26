@@ -14,6 +14,8 @@ from mrtg_cmp.netcare.scraper import NetcareCache, ScrapeOutcome
 from mrtg_cmp.netcare.service import (
     NetcareDaemon,
     NetcareService,
+    NetcareSessionExpiredError,
+    _per_target_capture,
     build_service_from_settings,
 )
 from mrtg_cmp.netcare.targets import DEFAULT_TARGETS, NetcareTarget
@@ -153,6 +155,218 @@ def test_scrape_round_status_manifest_covers_every_target(tmp_path: Path) -> Non
     manifest = cache.read_manifest()
     assert len(manifest) == len(targets)
     assert all(entry["status"] == "ok" for entry in manifest.values())
+
+
+# --- Re-login recovery on an expired session (Task 33.2) -------------------
+
+
+class RecoveringCapturer:
+    """A capturer whose session expires, with an optional re-login hook."""
+
+    def __init__(
+        self,
+        payload: bytes,
+        *,
+        expires_after: int = 0,
+        expires_forever: bool = False,
+        relogin_result: bool = True,
+        relogin_raises: bool = False,
+        with_hook: bool = True,
+    ) -> None:
+        self.payload = payload
+        self.expires_after = expires_after
+        self.expires_forever = expires_forever
+        self.relogin_result = relogin_result
+        self.relogin_raises = relogin_raises
+        self.attempts: list[str] = []
+        self.logins = 0
+        if with_hook:
+            self.relogin = self._relogin  # type: ignore[attr-defined]
+
+    def _relogin(self) -> bool:
+        self.logins += 1
+        if self.relogin_raises:
+            raise RuntimeError("captcha solver unavailable")
+        return self.relogin_result
+
+    def __call__(self, target: NetcareTarget) -> bytes:
+        self.attempts.append(target.target)
+        if self.expires_forever or len(self.attempts) <= self.expires_after:
+            raise NetcareSessionExpiredError("TelkomCare session expired: re-login is required")
+        return self.payload
+
+
+def test_an_expired_session_is_retried_once_after_a_re_login(tmp_path: Path) -> None:
+    """One stale cookie must cost a re-login, not an error on every branch."""
+
+    from mrtg_cmp.netcare.service import scrape_round
+
+    cache = NetcareCache(tmp_path)
+    target = DEFAULT_TARGETS[0]
+    capturer = RecoveringCapturer(_graph_bytes(), expires_after=1)
+
+    outcomes = scrape_round(cache, [target], capturer)
+
+    assert [o.status for o in outcomes] == ["ok"]
+    assert capturer.logins == 1
+    assert capturer.attempts == [target.target, target.target]
+    assert cache.has_image(target.target)
+    assert cache.read_manifest()[target.target]["status"] == "ok"
+
+
+def test_the_retry_happens_only_once_never_in_a_loop(tmp_path: Path) -> None:
+    """A second expiry fails the target; retrying again only delays the round."""
+
+    from mrtg_cmp.netcare.service import scrape_round
+
+    cache = NetcareCache(tmp_path)
+    target = DEFAULT_TARGETS[0]
+    capturer = RecoveringCapturer(_graph_bytes(), expires_forever=True)
+
+    outcomes = scrape_round(cache, [target], capturer)
+
+    assert [o.status for o in outcomes] == ["error"]
+    assert capturer.logins == 1, "one re-login, then the target is given up on"
+    assert len(capturer.attempts) == 2
+    assert outcomes[0].error is not None
+    assert "session expired" in outcomes[0].error
+
+
+def test_a_failed_re_login_records_the_expiry_rather_than_a_login_error(
+    tmp_path: Path,
+) -> None:
+    """The operator needs to know the session died, not that the retry failed."""
+
+    from mrtg_cmp.netcare.service import scrape_round
+
+    cache = NetcareCache(tmp_path)
+    target = DEFAULT_TARGETS[0]
+    capturer = RecoveringCapturer(_graph_bytes(), expires_forever=True, relogin_result=False)
+
+    outcomes = scrape_round(cache, [target], capturer)
+
+    assert [o.status for o in outcomes] == ["error"]
+    assert outcomes[0].error is not None
+    assert "session expired" in outcomes[0].error
+    assert cache.read_manifest()[target.target]["status"] == "error"
+
+
+def test_a_raising_re_login_does_not_escape_the_round(tmp_path: Path) -> None:
+    """A re-login that blows up is contained, exactly like any capture failure."""
+
+    from mrtg_cmp.netcare.service import scrape_round
+
+    cache = NetcareCache(tmp_path)
+    target = DEFAULT_TARGETS[0]
+    capturer = RecoveringCapturer(_graph_bytes(), expires_forever=True, relogin_raises=True)
+
+    outcomes = scrape_round(cache, [target], capturer)
+
+    assert [o.status for o in outcomes] == ["error"]
+    assert capturer.logins == 1
+
+
+def test_a_capturer_without_a_re_login_hook_still_fails_cleanly(tmp_path: Path) -> None:
+    """A caller-supplied lambda has no session to re-authenticate."""
+
+    from mrtg_cmp.netcare.service import scrape_round
+
+    cache = NetcareCache(tmp_path)
+    target = DEFAULT_TARGETS[0]
+    attempts: list[str] = []
+
+    def capture(branch: NetcareTarget) -> bytes:
+        attempts.append(branch.target)
+        raise NetcareSessionExpiredError("session expired")
+
+    outcomes = scrape_round(cache, [target], capture)
+
+    assert [o.status for o in outcomes] == ["error"]
+    assert attempts == [target.target], "without a hook there is nothing to retry with"
+
+
+def test_one_branch_expiring_does_not_stop_the_rest_of_the_round(tmp_path: Path) -> None:
+    """The recovery is per target: the round still completes every branch."""
+
+    from mrtg_cmp.netcare.service import scrape_round
+
+    cache = NetcareCache(tmp_path)
+    targets = [DEFAULT_TARGETS[0], DEFAULT_TARGETS[1]]
+    payload = _graph_bytes()
+    doomed, healthy = targets
+    state = {"doomed_attempts": 0}
+
+    def capture(target: NetcareTarget) -> bytes:
+        if target.target == doomed.target:
+            state["doomed_attempts"] += 1
+            if state["doomed_attempts"] == 1:
+                raise NetcareSessionExpiredError("session expired")
+        return payload
+
+    def relogin() -> bool:
+        return True
+
+    capture.relogin = relogin  # type: ignore[attr-defined]
+
+    outcomes = scrape_round(cache, targets, capture, 1)
+
+    assert [o.status for o in outcomes] == ["ok", "ok"]
+    assert state["doomed_attempts"] == 2
+
+
+def test_each_worker_recovers_through_its_own_session(tmp_path: Path) -> None:
+    """A worker re-logs its own session, so the hooks must be per index."""
+
+    from mrtg_cmp.netcare.service import scrape_round
+
+    cache = NetcareCache(tmp_path)
+    targets = list(DEFAULT_TARGETS)
+    payload = _graph_bytes()
+    logins: dict[int, int] = {}
+
+    def factory(worker: int) -> Any:
+        capturer = RecoveringCapturer(payload, expires_after=1)
+
+        def login() -> bool:
+            logins[worker] = logins.get(worker, 0) + 1
+            return True
+
+        capturer.relogin = login  # type: ignore[attr-defined]
+        return capturer
+
+    outcomes = scrape_round(cache, targets, None, 3, capturer_factory=factory)
+
+    assert all(o.status == "ok" for o in outcomes)
+    assert sum(logins.values()) == 3, "one re-login per worker that hit an expiry"
+
+
+def test_per_target_capture_publishes_a_relogin_hook(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The hook is how the round reaches the session behind a capturer."""
+
+    from mrtg_cmp.netcare import service as service_module
+
+    logins: list[int] = []
+
+    class StubSession:
+        page_timeout_seconds = 25
+        driver = object()
+
+        def login(self) -> bool:
+            logins.append(1)
+            return True
+
+    monkeypatch.setattr(
+        service_module,
+        "_capture_via_driver",
+        lambda *_a, **_k: _graph_bytes(),
+    )
+
+    capture = _per_target_capture(StubSession(), "https://portal.example.test")  # type: ignore[arg-type]
+
+    assert capture(DEFAULT_TARGETS[0])  # type: ignore[call-arg]
+    hook = capture.relogin  # type: ignore[attr-defined]
+    assert hook() is True
+    assert logins == [1]
 
 
 # --- Worker pool (FR-15.1) -------------------------------------------------

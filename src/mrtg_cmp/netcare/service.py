@@ -76,6 +76,20 @@ SID_DATE_INPUT_XPATH = (
 #: Path the portal redirects to once the session is no longer valid.
 LOGIN_PATH = "/public/login"
 
+#: Seconds the page needs to settle after a modal alert is dismissed. The portal
+#: paints its next frame asynchronously, so interacting immediately after
+#: ``accept()`` lands on the pre-dismissal layout.
+ALERT_SETTLE_SECONDS = 1.0
+
+#: The portal's AJAX busy indicators. Whichever of them is still *displayed*
+#: after a form or filter submission means the graph request behind it is still
+#: in flight, so reading the graph image before they detach reads a stale one.
+LOADING_OVERLAY_SELECTOR = ".blockUI, .loading, #loader, .spinner"
+#: Seconds to wait for those overlays to detach before looking for the graph.
+OVERLAY_TIMEOUT_SECONDS = 10
+#: Poll interval while waiting for the overlays to go away.
+OVERLAY_POLL_SECONDS = 0.5
+
 #: Hides every non-ancestor element and pins the graph image full-bleed so a
 #: capture cannot pick up pop-ups, banners, or stray overlays.
 GRAPH_ISOLATION_SCRIPT = """
@@ -150,6 +164,21 @@ CapturerFactory = Callable[[int], TargetCapturer]
 SessionFactory = Callable[[int], "NetcareSession"]
 
 
+def _sleep(seconds: float) -> None:
+    """Sleep for ``seconds``, routed through a seam so tests can intercept it.
+
+    The alert settle and the overlay poll are the only deliberate pauses in the
+    capture path. Routing both through one indirect call lets a test record or
+    collapse them, so the assertions can be about *whether* the pause happened
+    rather than about how long the suite took.
+    """
+
+    _sleep_hook(seconds)
+
+
+_sleep_hook: Callable[[float], Any] = time.sleep
+
+
 def normalize_workers(workers: int) -> int:
     """Return a usable worker count, degrading a bad value to one.
 
@@ -192,16 +221,72 @@ def partition_targets(
     return buckets
 
 
+def _relogin_hook(capture: TargetCapturer) -> Callable[[], bool] | None:
+    """Return a capturer's re-login hook, or None when it has none.
+
+    A plain function carries no session to re-authenticate, so the hook is read
+    off the capturer rather than assumed. That keeps a caller-supplied lambda
+    working exactly as before; it just never recovers.
+    """
+
+    hook = getattr(capture, "relogin", None)
+    return hook if callable(hook) else None
+
+
+def _relogin_and_retry(
+    capture: TargetCapturer,
+    target: NetcareTarget,
+    relogin: Callable[[], bool] | None,
+) -> bytes | None:
+    """Re-authenticate and retry one target, returning None if that does not work.
+
+    Exactly one retry, never a loop: an expired session is a re-login problem,
+    and re-running the same capture against a portal that refuses every session
+    only delays the round for each remaining target.
+    """
+
+    if relogin is None:
+        logger.warning("No re-login hook for %s; failing the target", target.target)
+        return None
+    try:
+        if not relogin():
+            logger.warning("TelkomCare re-login failed; giving up on %s", target.target)
+            return None
+    except Exception as exc:
+        logger.warning("TelkomCare re-login raised for %s: %s", target.target, exc)
+        return None
+
+    logger.info("Re-authenticated TelkomCare; retrying %s", target.target)
+    try:
+        return capture(target)
+    except Exception as exc:
+        logger.warning("Retry after re-login failed for %s: %s", target.target, exc)
+        return None
+
+
 def _capture_one(
     cache: NetcareCache,
     target: NetcareTarget,
     capture: TargetCapturer,
     day: str | None,
+    relogin: Callable[[], bool] | None = None,
 ) -> ScrapeOutcome:
-    """Capture a single target, recording the outcome in the manifest."""
+    """Capture a single target, recording the outcome in the manifest.
+
+    An expired session is retried once after a re-login. Every other failure is
+    recorded as-is: the round's contract is that one bad link never aborts the
+    rest, and the previous image stays visible as ``stale``.
+    """
 
     try:
         payload = capture(target)
+    except NetcareSessionExpiredError as exc:
+        logger.warning("TelkomCare session expired on %s: %s", target.target, exc)
+        retry = _relogin_and_retry(capture, target, relogin)
+        if retry is None:
+            cache.mark_error(target.target, str(exc), day)
+            return ScrapeOutcome.from_error(target.target, str(exc))
+        payload = retry
     except Exception as exc:
         logger.warning("Netcare capture failed for %s: %s", target.target, exc)
         cache.mark_error(target.target, str(exc), day)
@@ -238,6 +323,11 @@ def scrape_round(
     selects a date partition; ``None`` writes the live flat cache. ``stage``
     publishes the branch currently being captured, and ``cancelled`` lets an
     operator abandon the round between targets instead of waiting it out.
+
+    A capturer built by ``_per_target_capture`` carries a ``relogin`` hook. When
+    one is present, a target that hits an expired session is retried once after
+    re-authenticating, so one stale cookie costs a re-login rather than an error
+    on every remaining branch in the round.
 
     Raises:
         ValueError: when neither ``capture`` nor ``capturer_factory`` is given,
@@ -277,13 +367,16 @@ def scrape_round(
         else:
             assert capture is not None  # guarded above
             bucket_capture = capture
+        # Resolved once per worker: the hook belongs to the session this bucket's
+        # capturer drives, so it cannot differ between the bucket's targets.
+        relogin = _relogin_hook(bucket_capture)
         start = offsets[index]
         for offset, target in enumerate(buckets[index]):
             if is_cancelled():
                 logger.info("Netcare round cancelled before %s", target.target)
                 return
             publish(branch_stage(target.name, start + offset + 1, total))
-            outcome = _capture_one(cache, target, bucket_capture, day_partition)
+            outcome = _capture_one(cache, target, bucket_capture, day_partition, relogin)
             with lock:
                 results[start + offset] = outcome
                 state["completed"] += 1
@@ -690,6 +783,18 @@ def _per_target_capture(
             base_url=base_url,
         )
 
+    def relogin() -> bool:
+        """Re-authenticate the portal session this capturer drives.
+
+        Attached to the capturer rather than kept beside it, because the round
+        only ever holds the callable: an expired session has to be recoverable
+        from whatever the caller handed in, with no extra plumbing per worker.
+        """
+
+        logger.info("TelkomCare session expired; logging in again")
+        return session.login()
+
+    capture.relogin = relogin  # type: ignore[attr-defined]
     return capture
 
 
@@ -728,6 +833,91 @@ def _reject_expired_session(driver: Any) -> None:
         raise NetcareSessionExpiredError(
             f"TelkomCare session expired: redirected to {current}; re-login is required"
         )
+
+
+def _visible_overlay(driver: Any) -> Any | None:
+    """Return the first loading overlay currently on screen, if any.
+
+    An overlay element that exists in the DOM but is hidden is not blocking
+    anything, so visibility — not mere presence — decides. Treating a hidden
+    overlay as pending would stall every capture for the full timeout on a
+    portal that keeps its spinners permanently in the markup.
+    """
+
+    from selenium.webdriver.common.by import By
+
+    try:
+        elements = driver.find_elements(By.CSS_SELECTOR, LOADING_OVERLAY_SELECTOR)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("Could not inspect TelkomCare loading overlays: %s", exc)
+        return None
+    for element in elements:
+        try:
+            if element.is_displayed():
+                return element
+        except Exception:  # pragma: no cover - stale element
+            continue
+    return None
+
+
+def _dismiss_alert_if_present(driver: Any) -> bool:
+    """Accept a pending browser alert, returning True when one was dismissed.
+
+    The portal raises modal JavaScript alerts for its own failures — most often
+    a DataTables warning when a table request returns JSON where HTML was
+    expected. A modal alert blocks every click and keystroke, so a capture that
+    does not clear it first hangs on the next ``wait.until`` and is eventually
+    reported as ``Graph did not render``, which names the wrong cause.
+
+    Absent alert is the overwhelmingly common case and must stay cheap: the
+    settle sleep is only paid when something was actually dismissed.
+    """
+
+    try:
+        alert = driver.switch_to.alert
+    except Exception:
+        return False
+
+    text = ""
+    try:
+        text = str(getattr(alert, "text", "") or "").strip()
+    except Exception:  # pragma: no cover - a driver that cannot read the text
+        # The alert text is only used for the log line; failing to read it must
+        # not stop the alert from being accepted.
+        logger.debug("TelkomCare alert exposed no readable text")
+    try:
+        alert.accept()
+    except Exception as exc:  # pragma: no cover - dismissed by someone else
+        logger.debug("TelkomCare alert vanished before it could be accepted: %s", exc)
+        return False
+    logger.warning("Dismissed a TelkomCare alert: %s", text or "(no text)")
+    _sleep(ALERT_SETTLE_SECONDS)
+    return True
+
+
+def _wait_for_loading_overlay(
+    driver: Any,
+    timeout_seconds: float = OVERLAY_TIMEOUT_SECONDS,
+) -> bool:
+    """Wait for every TelkomCare loading overlay to detach. True when it settled.
+
+    A filter click fires an AJAX request that renders the graph before it
+    finishes. Reading ``graph.php`` in that window finds the *previous* branch's
+    image still on the page, which is how a capture silently stored the wrong
+    graph. Timing out is not treated as fatal: the graph wait that follows is
+    the real gate, and an overlay that outlives its timeout means a slow portal,
+    not a missing graph.
+    """
+
+    deadline = time.monotonic() + max(0.0, timeout_seconds)
+    while True:
+        overlay = _visible_overlay(driver)
+        if overlay is None:
+            return True
+        if time.monotonic() >= deadline:
+            logger.warning("TelkomCare overlay still present after %.0fs", timeout_seconds)
+            return False
+        _sleep(OVERLAY_POLL_SECONDS)
 
 
 def _submit_target(
@@ -813,6 +1003,9 @@ def _capture_via_driver(
     by, ec, wait, keys = _portal_helpers(driver, timeout_seconds)
     driver.get(build_graph_url(target, base_url or global_settings.netcare_base_url))
     _reject_expired_session(driver)
+    # Before any DOM work: a modal alert raised by a previous target would
+    # swallow every click and keystroke that follows.
+    _dismiss_alert_if_present(driver)
 
     _submit_target(driver, by, ec, wait, keys, target)
     # Submitting the form is itself what an expired session trips, so the check
@@ -826,6 +1019,10 @@ def _capture_via_driver(
     # window, so this fails loudly instead of quietly charting the wrong range.
     if not _apply_date_filter(driver, by, ec, wait, target, start, end):
         raise RuntimeError(f"Date filter could not be applied for {target.target}")
+
+    # The filter click only starts the AJAX render; reading the image before the
+    # overlay detaches picks up whatever graph was already on the page.
+    _wait_for_loading_overlay(driver)
 
     if not _wait_for_graph(driver, by, timeout_seconds):
         raise RuntimeError(f"Graph did not render for {target.target}")
@@ -854,13 +1051,20 @@ def _find_graph(driver: Any, by: Any) -> Any | None:
 
 
 def _wait_for_graph(driver: Any, by: Any, timeout_seconds: int) -> bool:
-    """Poll until the graph image has rendered, or the timeout elapses."""
+    """Poll until the graph image has rendered, or the timeout elapses.
+
+    Each pass also looks for a modal alert and a visible loading overlay: either
+    one freezes the render, so waiting without clearing them burns the whole
+    timeout on a page that is merely blocked rather than broken.
+    """
 
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
+        _dismiss_alert_if_present(driver)
+        _wait_for_loading_overlay(driver, min(OVERLAY_TIMEOUT_SECONDS, timeout_seconds))
         if _find_graph(driver, by) is not None:
             return True
-        time.sleep(1)
+        _sleep(1)
     return False
 
 
@@ -1076,13 +1280,17 @@ def install_shutdown_handlers(stop_event: threading.Event) -> None:
 
 
 __all__ = [
+    "ALERT_SETTLE_SECONDS",
     "DEFAULT_INTERVAL_SECONDS",
     "DEFAULT_WORKERS",
     "GRAPH_IMAGE_XPATH",
     "GRAPH_ISOLATION_SCRIPT",
     "GRAPH_RESTORE_SCRIPT",
+    "LOADING_OVERLAY_SELECTOR",
     "LOGIN_PATH",
     "MIN_GRAPH_WIDTH_PX",
+    "OVERLAY_POLL_SECONDS",
+    "OVERLAY_TIMEOUT_SECONDS",
     "SHOW_GRAPH_SELECTOR",
     "SID_DATE_INPUT_XPATH",
     "SID_FILTER_BUTTON_XPATH",

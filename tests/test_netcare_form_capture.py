@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Any
 
 import pytest
-from selenium.common.exceptions import NoSuchElementException
+from selenium.common.exceptions import NoAlertPresentException, NoSuchElementException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 
@@ -24,7 +24,9 @@ from mrtg_cmp.netcare import service as service_module
 from mrtg_cmp.netcare.service import (
     NetcareSessionExpiredError,
     _capture_via_driver,
+    _dismiss_alert_if_present,
     _per_target_capture,
+    _wait_for_loading_overlay,
 )
 from mrtg_cmp.netcare.targets import NetcareTarget, NetcareTargetType
 
@@ -35,6 +37,7 @@ LOGIN_URL = f"{BASE_URL}/public/login"
 START = "18/09/2026 00:00"
 END = "18/09/2026 23:55"
 PNG = b"\x89PNG\r\n\x1a\n rendered graph"
+DATA_TABLES_WARNING = "DataTables warning: request to server failed."
 
 Locator = tuple[str, str]
 SID_INPUT: Locator = (By.NAME, "sid")
@@ -45,6 +48,7 @@ SID_DATES: Locator = (By.XPATH, service_module.SID_DATE_INPUT_XPATH)
 STARTDATE: Locator = (By.ID, "startdate")
 ENDDATE: Locator = (By.ID, "enddate")
 GRAPHFILTER: Locator = (By.ID, "graphfilter")
+OVERLAYS: Locator = (By.CSS_SELECTOR, service_module.LOADING_OVERLAY_SELECTOR)
 
 
 def _target(target_type: NetcareTargetType, target_id: str = "target-001") -> NetcareTarget:
@@ -76,6 +80,7 @@ class FakeElement:
         self.keys_sent.append(text)
         self.value += str(text)
         self.portal.key_presses.append((self.kind, text))
+        self.portal.events.append("key-press")
 
     def click(self) -> None:
         self.portal.native_clicks.append(self)
@@ -92,12 +97,51 @@ class FakeElement:
         return PNG
 
 
+class FakeAlert:
+    """A modal browser alert, which blocks every click until it is accepted."""
+
+    def __init__(self, portal: FakePortal, text: str) -> None:
+        self.portal = portal
+        self.text = text
+        self.accepted = False
+
+    def accept(self) -> None:
+        self.accepted = True
+        self.portal.accepted_alerts.append(self)
+        self.portal.pending_alert = None
+        self.portal.events.append("alert-accepted")
+        if self.portal.graph_waits_for_this_alert:
+            # The graph is only in the DOM once the modal is gone, which is what
+            # makes clearing the alert a precondition for the render.
+            self.portal.graph_renders = True
+
+
+class FakeSwitchTo:
+    """The subset of ``driver.switch_to`` the alert handling touches."""
+
+    def __init__(self, portal: FakePortal) -> None:
+        self._portal = portal
+
+    @property
+    def alert(self) -> FakeAlert:
+        alert = self._portal.pending_alert
+        if alert is None:
+            # Selenium raises exactly this when no alert is open; the capture
+            # path must treat it as the normal case, not an error.
+            raise NoAlertPresentException("no alert open")
+        return alert
+
+
 class FakePortal:
     """A TelkomCare graph page pair: a search form and a target detail view.
 
     Pressing "Show Graph" swaps the element map to the detail view, and pressing
     the date filter publishes the ``graph.php`` image. That ordering is the whole
     point of these tests: a capture that skips the form must never see a graph.
+
+    ``alert_on_load`` / ``alert_on_filter`` raise a modal alert at those points,
+    and ``overlay_polls`` keeps a loading overlay on screen for that many polls
+    before detaching it, which is what an AJAX filter submission looks like.
     """
 
     def __init__(
@@ -108,6 +152,11 @@ class FakePortal:
         detail_ready: bool = True,
         graph_renders: bool = True,
         graph_width: int = 600,
+        alert_on_load: bool = False,
+        alert_on_filter: bool = False,
+        overlay_polls: int = 0,
+        overlay_never_detaches: bool = False,
+        overlay_hidden: bool = False,
     ) -> None:
         self.target_type = target_type
         self.login_on_load = login_on_load
@@ -115,6 +164,12 @@ class FakePortal:
         self.detail_ready = detail_ready
         self.graph_renders = graph_renders
         self.graph_width = graph_width
+        self.alert_on_load = alert_on_load
+        self.alert_on_filter = alert_on_filter
+        self.overlay_polls = overlay_polls
+        self.overlay_never_detaches = overlay_never_detaches
+        self.overlay_hidden = overlay_hidden
+        self.graph_waits_for_this_alert = False
 
         self.current_url = "about:blank"
         self.visited: list[str] = []
@@ -127,6 +182,13 @@ class FakePortal:
         self.scrolled: list[FakeElement] = []
         self.captures: list[FakeElement] = []
         self.scripts: list[str] = []
+        self.accepted_alerts: list[FakeAlert] = []
+        self.pending_alert: FakeAlert | None = None
+        self.overlay_active = overlay_polls > 0 or overlay_never_detaches
+        self.events: list[str] = []
+        self.switch_to = FakeSwitchTo(self)
+        self.overlay = FakeElement("loading-overlay", self)
+        self.overlay.displayed = not overlay_hidden
 
         input_locator = SID_INPUT if target_type is NetcareTargetType.SID else GRAPH_TITLE_INPUT
         self.target_input = FakeElement(input_locator[1], self)
@@ -162,6 +224,8 @@ class FakePortal:
         self.current_url = LOGIN_URL if self.login_on_load else url
         self.on_detail = False
         self.filter_applied = False
+        if self.alert_on_load:
+            self.raise_alert()
 
     def find_element(self, by: str, value: str) -> Any:
         matches = self._visible().get((by, value))
@@ -170,8 +234,12 @@ class FakePortal:
         return matches[0]
 
     def find_elements(self, by: str, value: str) -> list[Any]:
+        if (by, value) == OVERLAYS:
+            return self._overlays()
         if value == service_module.GRAPH_IMAGE_XPATH:
-            rendered = self.filter_applied and self.graph_renders
+            # While the overlay is up the previous request's image is what the
+            # DOM still holds, so the portal only publishes the new one after it.
+            rendered = self.filter_applied and self.graph_renders and not self.overlay_active
             return [self.graph] if rendered else []
         return list(self._visible().get((by, value)) or [])
 
@@ -200,6 +268,33 @@ class FakePortal:
             return {}
         return self.detail if self.on_detail else self.search
 
+    def raise_alert(self, text: str = DATA_TABLES_WARNING) -> FakeAlert:
+        """Open a modal alert, the way the portal reports a DataTables failure."""
+
+        alert = FakeAlert(self, text)
+        self.pending_alert = alert
+        self.events.append("alert-raised")
+        return alert
+
+    def _overlays(self) -> list[FakeElement]:
+        """Report the loading overlay while it is still attached to the page."""
+
+        if not self.overlay_active:
+            return []
+        if not self.overlay.displayed:
+            # Mirrors the production visibility check: a hidden overlay is gone
+            # for this portal's purposes.
+            self.overlay_active = False
+            self.events.append("overlay-cleared")
+            return []
+        self.events.append("overlay-poll")
+        if not self.overlay_never_detaches:
+            self.overlay_polls -= 1
+            if self.overlay_polls <= 0:
+                self.overlay_active = False
+                self.events.append("overlay-cleared")
+        return [self.overlay] if self.overlay_active else []
+
     def _press(self, element: Any) -> None:
         self.js_clicks.append(element)
         if element.kind == "show-graph":
@@ -209,6 +304,11 @@ class FakePortal:
             self.on_detail = True
         elif element.kind in {"sid-filter", "graphfilter"}:
             self.filter_applied = True
+            if self.alert_on_filter:
+                self.raise_alert()
+            elif self.overlay_polls > 0 or self.overlay_never_detaches:
+                # The AJAX render the filter kicked off shows a busy overlay.
+                self.overlay_active = True
 
 
 def _capture(portal: FakePortal, target: NetcareTarget, timeout_seconds: int = 1) -> bytes:
@@ -220,6 +320,21 @@ def _capture(portal: FakePortal, target: NetcareTarget, timeout_seconds: int = 1
         timeout_seconds,
         base_url=BASE_URL,
     )
+
+
+@pytest.fixture
+def sleeps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Record the deliberate sleeps instead of paying them.
+
+    The alert settle and overlay poll waits are real wall-clock pauses in
+    production. Paying them in a test would either slow the suite down by seconds
+    or force the assertions to accept "no longer than 1s", which proves nothing
+    about whether the sleep happened at all.
+    """
+
+    recorded: list[float] = []
+    monkeypatch.setattr(service_module, "_sleep_hook", recorded.append)
+    return recorded
 
 
 # --- navigation and target input -------------------------------------------
@@ -408,6 +523,201 @@ def test_capture_isolates_and_restores_the_page() -> None:
     assert portal.captures == [portal.graph]
     assert portal.scripts[0] == service_module.GRAPH_ISOLATION_SCRIPT
     assert portal.scripts[-1] == service_module.GRAPH_RESTORE_SCRIPT
+
+
+# --- modal alert handling --------------------------------------------------
+
+
+def test_dismissing_an_alert_accepts_it_and_lets_the_page_settle(sleeps: list[float]) -> None:
+    """An accepted alert still needs a beat before the DOM is usable again."""
+
+    portal = FakePortal()
+    portal.raise_alert()
+
+    assert _dismiss_alert_if_present(portal) is True
+
+    assert portal.accepted_alerts[0].text == DATA_TABLES_WARNING
+    assert portal.pending_alert is None
+    assert sleeps == [service_module.ALERT_SETTLE_SECONDS]
+
+
+def test_no_alert_is_the_cheap_case(sleeps: list[float]) -> None:
+    """Absent alert is the normal case, so it must not cost a settle sleep."""
+
+    portal = FakePortal()
+
+    assert _dismiss_alert_if_present(portal) is False
+
+    assert portal.accepted_alerts == []
+    assert sleeps == [], "an absent alert must not sleep"
+
+
+def test_a_capture_clears_an_alert_before_it_touches_the_form(sleeps: list[float]) -> None:
+    """A modal alert swallows every click, so it goes before the first keypress."""
+
+    portal = FakePortal(alert_on_load=True)
+
+    assert _capture(portal, _target(NetcareTargetType.SID)) == PNG
+
+    assert [alert.text for alert in portal.accepted_alerts] == [DATA_TABLES_WARNING]
+    assert portal.events.index("alert-accepted") < portal.events.index("key-press")
+    assert portal.key_presses, "the capture must still type the target afterwards"
+
+
+def test_a_capture_clears_an_alert_raised_by_the_filter_click(sleeps: list[float]) -> None:
+    """The portal's DataTables warning arrives with the filter, not the page load."""
+
+    portal = FakePortal(alert_on_filter=True)
+
+    assert _capture(portal, _target(NetcareTargetType.SID)) == PNG
+
+    assert len(portal.accepted_alerts) == 1
+    assert portal.accepted_alerts[0].text == DATA_TABLES_WARNING
+
+
+def test_a_capture_clears_an_alert_that_appears_while_waiting_for_the_graph(
+    sleeps: list[float],
+) -> None:
+    """An alert raised mid-wait freezes the render; the poll must clear it."""
+
+    portal = FakePortal(graph_renders=False)
+    portal.graph_waits_for_this_alert = True
+    original_find_elements = portal.find_elements
+
+    def find_elements(by: str, value: str) -> list[Any]:
+        # Raise the alert once the capture is already polling for the graph.
+        if value == service_module.GRAPH_IMAGE_XPATH and not portal.pending_alert:
+            portal.raise_alert()
+        return original_find_elements(by, value)
+
+    portal.find_elements = find_elements  # type: ignore[method-assign]
+
+    assert _capture(portal, _target(NetcareTargetType.SID), timeout_seconds=5) == PNG
+
+    assert len(portal.accepted_alerts) == 1
+    assert portal.events.index("alert-raised") > portal.events.index("key-press"), (
+        "the alert has to arrive during the graph wait, not before the form"
+    )
+
+
+def test_a_capture_still_fails_fast_when_only_an_alert_is_in_the_way(sleeps: list[float]) -> None:
+    """The alert must be cleared, not mistaken for a portal that lost its form."""
+
+    portal = FakePortal(alert_on_load=True)
+    portal.search = {}
+
+    with pytest.raises(Exception):  # noqa: B017 - the specific timeout type is Selenium's
+        _capture(portal, _target(NetcareTargetType.SID), timeout_seconds=25)
+
+    assert portal.accepted_alerts, "the alert was dismissed; the form really is gone"
+
+
+# --- loading overlay synchronisation ---------------------------------------
+
+
+def test_waiting_for_the_overlay_returns_immediately_when_there_is_none(
+    sleeps: list[float],
+) -> None:
+    """No overlay means no reason to spend a single poll."""
+
+    portal = FakePortal()
+
+    assert _wait_for_loading_overlay(portal) is True
+
+    assert sleeps == []
+
+
+def test_the_overlay_wait_polls_until_the_overlay_detaches(sleeps: list[float]) -> None:
+    """The AJAX render is only finished once the busy indicator is gone."""
+
+    portal = FakePortal(overlay_polls=3)
+
+    assert _wait_for_loading_overlay(portal, timeout_seconds=10) is True
+
+    assert portal.events.count("overlay-poll") == 3
+    assert portal.events[-1] == "overlay-cleared"
+    assert portal.overlay_active is False
+    assert sleeps == [service_module.OVERLAY_POLL_SECONDS] * 2, (
+        "the last poll is the one that observed the overlay gone, so it must not sleep"
+    )
+
+
+def test_the_overlay_wait_gives_up_at_its_timeout_instead_of_hanging(
+    sleeps: list[float],
+) -> None:
+    """An overlay that outlives its budget means a slow portal, not a hang."""
+
+    portal = FakePortal(overlay_never_detaches=True)
+
+    assert _wait_for_loading_overlay(portal, timeout_seconds=0) is False
+    assert sleeps == [], "a zero budget must not sleep before reporting"
+
+    sleeps.clear()
+    assert _wait_for_loading_overlay(portal, timeout_seconds=1) is False
+    assert sleeps and all(seconds == service_module.OVERLAY_POLL_SECONDS for seconds in sleeps)
+
+
+def test_a_hidden_overlay_is_not_treated_as_a_blocked_page(sleeps: list[float]) -> None:
+    """Portal markup often keeps its spinner in the DOM permanently.
+
+    Waiting on mere presence would stall every capture for the full timeout on a
+    page that is not actually busy, so only a *displayed* overlay counts.
+    """
+
+    portal = FakePortal(overlay_never_detaches=True, overlay_hidden=True)
+
+    assert _wait_for_loading_overlay(portal, timeout_seconds=10) is True
+    assert sleeps == []
+
+
+def test_the_capture_reads_the_graph_only_after_the_overlay_clears(
+    sleeps: list[float],
+) -> None:
+    """The stale-image bug: the previous branch's graph is still on the page.
+
+    While the overlay is up this portal serves the *wrong* image, so a capture
+    that read it immediately would store another branch's traffic under this
+    branch's name.
+    """
+
+    portal = FakePortal(overlay_polls=2)
+    wrong_graph = FakeElement("stale-graph.php", portal, natural_width=600)
+    real_find_elements = portal.find_elements
+
+    def find_elements(by: str, value: str) -> list[Any]:
+        if value == service_module.GRAPH_IMAGE_XPATH:
+            if portal.overlay_active:
+                # Still the previous request's image, which is what the DOM holds.
+                return [wrong_graph]
+            return [portal.graph] if portal.filter_applied else []
+        return real_find_elements(by, value)
+
+    portal.find_elements = find_elements  # type: ignore[method-assign]
+
+    assert _capture(portal, _target(NetcareTargetType.SID)) == PNG
+
+    assert portal.captures == [portal.graph], "the graph read while busy was the stale one"
+    assert portal.overlay_active is False
+
+
+def test_a_capture_survives_an_overlay_that_never_detaches(
+    sleeps: list[float], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stuck overlay is not fatal: the graph wait that follows is the real gate.
+
+    The overlay helper is stubbed to time out rather than being driven by a
+    portal that never clears, because a fake whose overlay never detaches can
+    only end the poll loop on the wall clock — which these tests deliberately do
+    not spend. ``test_the_overlay_wait_gives_up_at_its_timeout_instead_of_hanging``
+    covers the timeout itself.
+    """
+
+    portal = FakePortal()
+    monkeypatch.setattr(service_module, "_wait_for_loading_overlay", lambda *_a, **_k: False)
+
+    assert _capture(portal, _target(NetcareTargetType.SID), timeout_seconds=5) == PNG
+
+    assert portal.captures == [portal.graph]
 
 
 # --- expired session -------------------------------------------------------
