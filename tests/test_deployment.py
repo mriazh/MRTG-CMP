@@ -15,6 +15,13 @@ DEPLOY_SCRIPT = REPO_ROOT / "deploy.sh"
 EXAMPLE_CATALOG = REPO_ROOT / "config" / "netcare_targets.csv.example"
 LIVE_CATALOG_RELATIVE = "config/netcare_targets.csv"
 EXAMPLE_CATALOG_RELATIVE = "config/netcare_targets.csv.example"
+EXAMPLE_ORBIT_CATALOG = REPO_ROOT / "config" / "orbit_targets.csv.example"
+LIVE_ORBIT_EXCEL_RELATIVE = f"config/orbit_{''.join(('gm', 'f'))}.xlsx"
+LIVE_ORBIT_CSV_RELATIVE = "config/orbit_targets.csv"
+EXAMPLE_ORBIT_CATALOG_RELATIVE = "config/orbit_targets.csv.example"
+EXAMPLE_CONFIG_ENV = REPO_ROOT / "config" / ".env.example"
+EXAMPLE_CONFIG_ENV_RELATIVE = "config/.env.example"
+LIVE_CONFIG_ENV_RELATIVE = "config/.env"
 
 EXPECTED_UNITS = (
     "mrtg-cmp-web.service",
@@ -49,6 +56,10 @@ FORBIDDEN_TERMS = tuple(
 #: TelkomCare portal identifiers follow two shapes: a 7-digit prefix, a hyphen,
 #: and 10 digits. Transcribing the digits literally would publish them here.
 FORBIDDEN_PORTAL_ID = re.compile(r"\b\d{7}-\d{10}\b")
+
+#: Real customer phone numbers and hardware IMEIs from the private Orbit catalog.
+FORBIDDEN_ORBIT_PHONE = re.compile(r"\b08(?:2151447|1214542|1367149|2264366|5284234)\d{4,5}\b")
+FORBIDDEN_ORBIT_IMEI = re.compile(r"\b(?:86933807|86308607|35974871)\d{7}\b")
 
 
 def _tracked_files() -> set[str]:
@@ -125,6 +136,17 @@ def test_unit_is_sandboxed(unit: str) -> None:
     text = _unit(unit).read_text(encoding="utf-8")
     assert "NoNewPrivileges=true" in text
     assert "ProtectSystem=strict" in text
+
+
+@pytest.mark.parametrize("unit", EXPECTED_UNITS)
+def test_unit_loads_config_env_before_root_env(unit: str) -> None:
+    """Systemd units load config/.env first, with fallback to root .env."""
+    text = _unit(unit).read_text(encoding="utf-8")
+    assert "EnvironmentFile=-@APP_DIR@/config/.env" in text
+    assert "EnvironmentFile=-@APP_DIR@/.env" in text
+    config_pos = text.index("EnvironmentFile=-@APP_DIR@/config/.env")
+    root_pos = text.index("EnvironmentFile=-@APP_DIR@/.env")
+    assert config_pos < root_pos
 
 
 def test_collector_unit_runs_the_collect_command() -> None:
@@ -204,6 +226,13 @@ def test_deploy_script_installs_units_from_systemd_dir() -> None:
     """Units are copied out of the repository's systemd/ directory."""
     text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
     assert "systemd" in text
+
+
+def test_deploy_script_supports_config_env() -> None:
+    """deploy.sh checks and seeds config/.env from .env or config/.env.example."""
+    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    assert "config/.env" in text
+    assert "config/.env.example" in text
 
 
 # --- Packaging -------------------------------------------------------------
@@ -298,9 +327,11 @@ def test_shipped_env_orders_gemini_models_by_quota_high_first() -> None:
     high_quota = ("gemini-3.5-flash-lite", "gemini-3.1-flash-lite")
     metered = ("gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash")
 
-    env_file = REPO_ROOT / ".env"
+    env_file = REPO_ROOT / "config" / ".env"
+    if not env_file.exists():
+        env_file = REPO_ROOT / ".env"
     if not env_file.exists():  # a fresh clone ships the example only
-        pytest.skip(".env is not present in this checkout")
+        pytest.skip(".env or config/.env is not present in this checkout")
 
     text = env_file.read_text(encoding="utf-8")
     match = re.search(r'^GEMINI_MODELS="([^"]*)"', text, re.MULTILINE)
@@ -325,6 +356,42 @@ def test_env_example_brands_the_site_neutrally() -> None:
     """The shipped example is public, so it must not name a single customer site."""
 
     assert _env_site_name(REPO_ROOT / ".env.example") == "Enterprise Gateway"
+
+
+def test_config_env_example_brands_the_site_neutrally() -> None:
+    """The config/.env.example template must brand the site neutrally."""
+
+    assert _env_site_name(EXAMPLE_CONFIG_ENV) == "Enterprise Gateway"
+
+
+def test_config_env_example_matches_root_example() -> None:
+    """config/.env.example must match the root .env.example template exactly."""
+
+    assert EXAMPLE_CONFIG_ENV.is_file()
+    assert EXAMPLE_CONFIG_ENV.read_text(encoding="utf-8") == (REPO_ROOT / ".env.example").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_config_env_example_obeys_opsec_rules() -> None:
+    """config/.env.example must contain zero customer identifiers or leaked secrets."""
+
+    text = EXAMPLE_CONFIG_ENV.read_text(encoding="utf-8").lower()
+    for term in FORBIDDEN_TERMS:
+        assert term not in text, f"config/.env.example leaks {term!r}"
+    assert not FORBIDDEN_PORTAL_ID.search(text)
+
+
+def test_config_env_is_gitignored() -> None:
+    """The private config/.env and config/.env.* files are gitignored."""
+
+    ignored = {
+        line.strip()
+        for line in (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    }
+    assert "config/.env" in ignored
+    assert "config/.env.*" in ignored
+    assert "!config/.env.example" in ignored
 
 
 def test_env_example_ships_no_secret_values() -> None:
@@ -363,9 +430,11 @@ def test_shipped_env_sets_its_own_site_name() -> None:
     of the published tree. What must hold is that they set one at all.
     """
 
-    env_file = REPO_ROOT / ".env"
+    env_file = REPO_ROOT / "config" / ".env"
+    if not env_file.exists():
+        env_file = REPO_ROOT / ".env"
     if not env_file.exists():  # a fresh clone ships the example only
-        pytest.skip(".env is not present in this checkout")
+        pytest.skip(".env or config/.env is not present in this checkout")
 
     assert _env_site_name(env_file).strip()
 
@@ -419,6 +488,46 @@ def test_deploy_script_seeds_a_missing_catalog_from_the_example() -> None:
     assert "cp " in text or "install " in text
 
 
+def test_live_orbit_catalog_is_gitignored() -> None:
+    """The deployment's own Orbit excel and csv catalogs must never be committed."""
+
+    ignored = {
+        line.strip()
+        for line in (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    }
+    assert any(pat in ignored for pat in (f"/{LIVE_ORBIT_EXCEL_RELATIVE}", "/config/orbit_*.xlsx"))
+    assert f"/{LIVE_ORBIT_CSV_RELATIVE}" in ignored
+    assert "data/orbit_cache/" in ignored
+    assert EXAMPLE_ORBIT_CATALOG_RELATIVE not in ignored
+
+
+def test_live_orbit_catalog_is_not_tracked() -> None:
+    """Git must not be holding the live private Orbit catalogs."""
+
+    tracked = _tracked_files()
+    assert LIVE_ORBIT_EXCEL_RELATIVE not in tracked
+    assert LIVE_ORBIT_CSV_RELATIVE not in tracked
+
+
+def test_example_orbit_catalog_is_tracked() -> None:
+    """A clone needs the anonymous Orbit template, so it has to be tracked."""
+
+    assert EXAMPLE_ORBIT_CATALOG.is_file()
+    assert EXAMPLE_ORBIT_CATALOG_RELATIVE in _tracked_files()
+
+
+def test_example_orbit_catalog_holds_twelve_anonymous_modems() -> None:
+    """The template must load 12 anonymous modems with no real customer data."""
+
+    from mrtg_cmp.orbit.targets import load_orbit_catalog_csv
+
+    modems = load_orbit_catalog_csv(EXAMPLE_ORBIT_CATALOG)
+    assert len(modems) == 12
+    assert all(m.phone.startswith("0812000000") for m in modems)
+    assert all(not FORBIDDEN_ORBIT_PHONE.search(m.phone) for m in modems)
+    assert all(not FORBIDDEN_ORBIT_IMEI.search(m.imei) for m in modems)
+
+
 def test_tracked_files_leak_no_customer_identifiers() -> None:
     """FR-23.1: no corporate name, facility, or portal id in the published tree.
 
@@ -441,6 +550,8 @@ def test_tracked_files_leak_no_customer_identifiers() -> None:
         for term in FORBIDDEN_TERMS:
             assert term not in text, f"{name} leaks {term!r}"
         assert not FORBIDDEN_PORTAL_ID.search(text), f"{name} leaks a portal circuit id"
+        assert not FORBIDDEN_ORBIT_PHONE.search(text), f"{name} leaks a customer phone number"
+        assert not FORBIDDEN_ORBIT_IMEI.search(text), f"{name} leaks a customer hardware IMEI"
 
 
 def test_log_file_is_not_committed() -> None:

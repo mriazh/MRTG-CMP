@@ -24,8 +24,12 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from starlette.testclient import TestClient
 
+from mrtg_cmp.auth import hash_password
 from mrtg_cmp.config import settings
+from mrtg_cmp.db import Database, TrafficSample
+from mrtg_cmp.web.app import app
 
 
 @pytest.fixture(autouse=True)
@@ -72,3 +76,58 @@ def isolated_netcare_catalog(tmp_path: Path) -> Iterator[Path]:
         yield missing
     finally:
         settings.netcare_catalog_file = previous
+
+
+@pytest.fixture(autouse=True)
+def isolated_orbit_cache(tmp_path: Path) -> Iterator[Path]:
+    """Point the Orbit status cache at a temporary directory for the duration."""
+
+    cache_dir = tmp_path / "orbit_cache"
+    previous = settings.orbit_cache_dir
+    settings.orbit_cache_dir = cache_dir
+    try:
+        yield cache_dir
+    finally:
+        settings.orbit_cache_dir = previous
+
+
+@pytest.fixture(autouse=True)
+def isolated_orbit_catalog(tmp_path: Path) -> Iterator[Path]:
+    """Hide the checkout's own Orbit catalog from tests by defaulting to fallback."""
+
+    missing = tmp_path / "config" / "orbit_targets.csv"
+    previous = settings.orbit_catalog_file
+    settings.orbit_catalog_file = str(missing)
+    try:
+        yield missing
+    finally:
+        settings.orbit_catalog_file = previous
+
+
+@pytest.fixture
+def client_with_db(tmp_path: Path) -> TestClient:
+    """Fixture providing a test client configured with a temporary database."""
+    test_db_path = tmp_path / "web_test.db"
+    db = Database(test_db_path)
+    db.initialize()
+
+    # Seed test user
+    db.create_user("admin", hash_password("admin123"))
+
+    # Seed some sample traffic records
+    db.insert_traffic_sample(
+        TrafficSample(
+            timestamp="2026-09-15T08:00:00Z",
+            rx_bytes=100_000_000,
+            tx_bytes=50_000_000,
+            rx_bps=10_000_000.0,
+            tx_bps=5_000_000.0,
+            epoch=1789459200,
+            uptime="5d",
+            status="UP",
+        )
+    )
+
+    settings.database_path = test_db_path
+    client = TestClient(app, follow_redirects=False)
+    return client

@@ -18,6 +18,8 @@ from .db import Database, TrafficSample
 logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_SANE_BPS = 10_000_000_000.0  # 10 Gbps threshold for sanity check
+DEFAULT_DOWN_TIMEOUT: int = 2
+FLAPPING_WINDOW_SECONDS: int = 120
 
 
 @dataclass(slots=True)
@@ -135,6 +137,12 @@ class RouterOSClient:
             self._pool.set_timeout(self.timeout)
         return self._pool.get_api()
 
+    def set_timeout(self, timeout: int) -> None:
+        """Update client socket timeout and propagate to active connection pool."""
+        self.timeout = timeout
+        if self._pool is not None:
+            self._pool.set_timeout(timeout)
+
     def disconnect(self) -> None:
         """Close connection pool."""
         if self._pool is not None:
@@ -193,17 +201,22 @@ class TrafficCollector:
             username=self.config.routeros_username,
             password=self.config.routeros_password,
             port=self.config.routeros_port,
+            timeout=getattr(self.config, "routeros_timeout", 15),
         )
 
         self._last_rx_bytes: int | None = None
         self._last_tx_bytes: int | None = None
         self._last_epoch: int | float | None = None
 
-        # Watchdog and notification state
+        # Watchdog, flapping, and notification state
         self._consecutive_failures: int = 0
         self._is_currently_down: bool = False
         self._active_down_scenario: str = "MIKROTIK_OFFLINE"
         self._local_net_down_epoch: float | None = None
+        self._last_up_epoch: float | None = None
+        self._last_down_epoch: float | None = None
+        self._flapping_detected: bool = False
+        self._last_flapping_reason: str = ""
 
         # Seed previous state from database if available
         self._seed_last_state()
@@ -215,6 +228,11 @@ class TrafficCollector:
             self._last_rx_bytes = latest["rx_bytes"]
             self._last_tx_bytes = latest["tx_bytes"]
             self._last_epoch = latest["epoch"]
+            if latest.get("epoch"):
+                self._last_up_epoch = float(latest["epoch"])
+        elif latest and latest.get("status") == "DOWN":
+            if latest.get("epoch"):
+                self._last_down_epoch = float(latest["epoch"])
 
     def _diagnose_failure(self, exc: Exception) -> tuple[str, str]:
         """Perform 4-layer sequential network triangulation upon polling failure.
@@ -333,6 +351,9 @@ class TrafficCollector:
         now_utc = datetime.fromtimestamp(now_epoch, tz=UTC)
         timestamp_str = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
 
+        if self._is_currently_down:
+            self.client.set_timeout(DEFAULT_DOWN_TIMEOUT)
+
         try:
             data = self.client.query_interface(self.config.routeros_interface)
             curr_rx = data["rx_bytes"]
@@ -358,12 +379,6 @@ class TrafficCollector:
                 uptime=uptime,
                 status=rate.status,
             )
-
-            if rate.should_store:
-                self.database.insert_traffic_sample(sample)
-                self._last_rx_bytes = curr_rx
-                self._last_tx_bytes = curr_tx
-                self._last_epoch = now_epoch
 
             # Check if recovering from local network outage
             if self._local_net_down_epoch is not None:
@@ -391,30 +406,67 @@ class TrafficCollector:
                         logger.debug("Failed to dispatch network restored alert: %s", net_err)
                 self._local_net_down_epoch = None
 
-            # Send resolved alert if recovering from a DOWN state
+            # Flapping detection and recovery from DOWN state
             if self._is_currently_down:
-                try:
-                    from .notifier import format_resolved_alert, send_whatsapp_message
-
-                    resolved_msg = format_resolved_alert(
-                        uptime=uptime or "unknown",
-                        rx_bps=rate.rx_bps,
-                        tx_bps=rate.tx_bps,
-                        router_name=f"WAN ({self.config.uplink_name})",
-                        scenario=self._active_down_scenario,
+                outage_duration = (
+                    now_epoch - self._last_down_epoch
+                    if self._last_down_epoch is not None
+                    else 0.0
+                )
+                if (
+                    self._last_down_epoch is not None
+                    and (now_epoch - self._last_down_epoch) <= FLAPPING_WINDOW_SECONDS
+                ):
+                    self._flapping_detected = True
+                    self._last_flapping_reason = (
+                        "Link flapping detected: reconnected after brief outage "
+                        f"({outage_duration:.1f}s)"
                     )
-                    send_whatsapp_message(resolved_msg)
-                except Exception as alert_err:
-                    logger.warning("Failed to send WhatsApp resolved alert: %s", alert_err)
+                    logger.warning(
+                        "[WARNING] Link flapping detected: reconnected after brief outage (%.1fs)",
+                        outage_duration,
+                    )
+                    rate.reason = self._last_flapping_reason
+                else:
+                    self._flapping_detected = False
+                    self._last_flapping_reason = ""
+
+                if self.config.wa_alert_enabled:
+                    try:
+                        from .notifier import format_resolved_alert, send_whatsapp_message
+
+                        resolved_msg = format_resolved_alert(
+                            uptime=uptime or "unknown",
+                            rx_bps=rate.rx_bps,
+                            tx_bps=rate.tx_bps,
+                            router_name=f"WAN ({self.config.uplink_name})",
+                            scenario=self._active_down_scenario,
+                        )
+                        send_whatsapp_message(resolved_msg)
+                    except Exception as alert_err:
+                        logger.warning("Failed to send WhatsApp resolved alert: %s", alert_err)
+
                 self._is_currently_down = False
                 self._active_down_scenario = "MIKROTIK_OFFLINE"
+                normal_timeout = getattr(self.config, "routeros_timeout", 15) or 15
+                self.client.set_timeout(normal_timeout)
+
+            if rate.should_store:
+                self.database.insert_traffic_sample(sample)
+                self._last_rx_bytes = curr_rx
+                self._last_tx_bytes = curr_tx
+                self._last_epoch = now_epoch
 
             self._consecutive_failures = 0
+            self._last_up_epoch = now_epoch
             return sample
 
         except Exception as exc:
             logger.warning("Collector failed to poll RouterOS API: %s", exc)
             self._consecutive_failures += 1
+
+            if self._last_down_epoch is None or not self._is_currently_down:
+                self._last_down_epoch = now_epoch
 
             scenario, scenario_reason = self._diagnose_failure(exc)
             if scenario == "DEBIAN_NET_DOWN" and self._local_net_down_epoch is None:
@@ -422,23 +474,24 @@ class TrafficCollector:
 
             # Dispatch DOWN alert when failure threshold is reached
             if (
-                self.config.wa_alert_enabled
-                and self._consecutive_failures >= self.config.wa_fail_threshold
+                self._consecutive_failures >= self.config.wa_fail_threshold
                 and not self._is_currently_down
             ):
                 self._is_currently_down = True
                 self._active_down_scenario = scenario
-                try:
-                    from .notifier import format_down_alert, send_whatsapp_message
+                self.client.set_timeout(DEFAULT_DOWN_TIMEOUT)
+                if self.config.wa_alert_enabled:
+                    try:
+                        from .notifier import format_down_alert, send_whatsapp_message
 
-                    down_msg = format_down_alert(
-                        router_name=f"WAN ({self.config.uplink_name})",
-                        reason=scenario_reason,
-                        scenario=scenario,
-                    )
-                    send_whatsapp_message(down_msg)
-                except Exception as alert_err:
-                    logger.warning("Failed to send WhatsApp down alert: %s", alert_err)
+                        down_msg = format_down_alert(
+                            router_name=f"WAN ({self.config.uplink_name})",
+                            reason=scenario_reason,
+                            scenario=scenario,
+                        )
+                        send_whatsapp_message(down_msg)
+                    except Exception as alert_err:
+                        logger.warning("Failed to send WhatsApp down alert: %s", alert_err)
 
             # Check watchdog auto-healing if configured and local internet is available
             if (
@@ -554,8 +607,14 @@ class TrafficCollector:
             if max_iterations is not None and iterations >= max_iterations:
                 break
 
+            current_interval = (
+                self.config.polling_interval_down
+                if self._is_currently_down
+                else (interval or self.config.polling_interval)
+            )
+
             # Sleep in 1-second chunks to respond quickly to stop_event
-            for _ in range(poll_interval):
+            for _ in range(current_interval):
                 if stop_event is not None and stop_event.is_set():
                     break
                 time.sleep(1)

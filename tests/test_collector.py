@@ -7,7 +7,10 @@ from pathlib import Path
 from typing import Any
 
 from mrtg_cmp.collector import (
+    DEFAULT_DOWN_TIMEOUT,
     DEFAULT_MAX_SANE_BPS,
+    FLAPPING_WINDOW_SECONDS,
+    RouterOSClient,
     TrafficCollector,
     calculate_rate,
 )
@@ -96,9 +99,19 @@ def test_calculate_rate_implausible_spike_is_guarded() -> None:
 class DummyRouterOSClient:
     """Mock RouterOS API client for deterministic offline testing."""
 
-    def __init__(self, responses: list[dict[str, Any] | Exception]) -> None:
+    def __init__(
+        self,
+        responses: list[dict[str, Any] | Exception],
+        timeout: int = 15,
+    ) -> None:
         self.responses = list(responses)
         self.disconnect_called = False
+        self.timeout = timeout
+        self.timeout_history: list[int] = [timeout]
+
+    def set_timeout(self, timeout: int) -> None:
+        self.timeout = timeout
+        self.timeout_history.append(timeout)
 
     def query_interface(self, interface_name: str) -> dict[str, Any]:
         if not self.responses:
@@ -248,4 +261,182 @@ def test_diagnose_failure_scenarios(tmp_path: Path) -> None:
         scenario, reason = collector._diagnose_failure(RuntimeError("timed out"))
         assert scenario == SCENARIO_MIKROTIK_OFFLINE
         assert "timed out" in reason
+
+
+def test_routeros_client_set_timeout() -> None:
+    """RouterOSClient.set_timeout updates client.timeout and pool timeout if connected."""
+    from unittest.mock import MagicMock
+
+    client = RouterOSClient(
+        host="192.168.88.1",
+        username="admin",
+        password="",
+        timeout=15,
+    )
+    assert client.timeout == 15
+
+    # Calling set_timeout before connection pool exists
+    client.set_timeout(2)
+    assert client.timeout == 2
+
+    # Calling set_timeout with active connection pool propagates to pool
+    mock_pool = MagicMock()
+    client._pool = mock_pool
+    client.set_timeout(3)
+    assert client.timeout == 3
+    mock_pool.set_timeout.assert_called_once_with(3)
+
+
+def test_traffic_collector_switches_timeout_on_down_and_restores_on_up(tmp_path: Path) -> None:
+    """TrafficCollector switches to fast timeout when down and restores normal timeout when UP."""
+    from unittest.mock import patch
+
+    db = Database(tmp_path / "timeout.db")
+    db.initialize()
+
+    mock_client = DummyRouterOSClient(
+        [
+            ConnectionResetError("Socket reset 1"),
+            ConnectionResetError("Socket reset 2"),
+            {"name": "WAN", "rx_bytes": 500_000, "tx_bytes": 600_000, "uptime": "1d"},
+        ],
+        timeout=15,
+    )
+
+    collector = TrafficCollector(
+        database=db,
+        client=mock_client,  # type: ignore[arg-type]
+    )
+
+    with patch.object(collector, "_diagnose_failure", return_value=("MIKROTIK_OFFLINE", "mocked")):
+        # First failure: consecutive_failures=1
+        collector.poll_once()
+        assert collector._is_currently_down is False
+
+        # Second failure: consecutive_failures=2 -> triggers _is_currently_down = True
+        collector.poll_once()
+        assert collector._is_currently_down is True
+        assert mock_client.timeout == DEFAULT_DOWN_TIMEOUT
+
+        # Recovery: poll succeeds while _is_currently_down is True
+        collector.poll_once()
+        assert collector._is_currently_down is False
+        assert mock_client.timeout == 15
+        assert DEFAULT_DOWN_TIMEOUT in mock_client.timeout_history
+
+
+def test_traffic_collector_run_adaptive_interval_down(tmp_path: Path) -> None:
+    """TrafficCollector.run uses polling_interval_down when DOWN and polling_interval when UP."""
+    from unittest.mock import patch
+
+    db = Database(tmp_path / "run_adaptive.db")
+    db.initialize()
+
+    # Client stays DOWN on first poll, then runs second poll
+    mock_down_client = DummyRouterOSClient(
+        [
+            ConnectionResetError("Still down"),
+            ConnectionResetError("Still down 2"),
+        ],
+        timeout=15,
+    )
+
+    collector_down = TrafficCollector(
+        database=db,
+        client=mock_down_client,  # type: ignore[arg-type]
+    )
+
+    collector_down._is_currently_down = True
+    collector_down.config.polling_interval_down = 5
+    collector_down.config.polling_interval = 30
+    collector_down.config.wa_alert_enabled = False
+
+    sleep_calls = 0
+
+    def mock_sleep(seconds: float) -> None:
+        nonlocal sleep_calls
+        sleep_calls += 1
+
+    with (
+        patch.object(
+            collector_down,
+            "_diagnose_failure",
+            return_value=("MIKROTIK_OFFLINE", "mocked"),
+        ),
+        patch("time.sleep", side_effect=mock_sleep),
+    ):
+        collector_down.run(max_iterations=2)
+
+    assert sleep_calls == 5
+
+    # Client stays UP on first poll, then runs second poll
+    mock_up_client = DummyRouterOSClient(
+        [
+            {"name": "WAN", "rx_bytes": 100, "tx_bytes": 100, "uptime": "1d"},
+            {"name": "WAN", "rx_bytes": 200, "tx_bytes": 200, "uptime": "1d"},
+        ],
+        timeout=15,
+    )
+
+    collector_up = TrafficCollector(
+        database=db,
+        client=mock_up_client,  # type: ignore[arg-type]
+    )
+
+    collector_up._is_currently_down = False
+    collector_up.config.polling_interval_down = 5
+    collector_up.config.polling_interval = 30
+    collector_up.config.wa_alert_enabled = False
+
+    sleep_calls = 0
+
+    with patch("time.sleep", side_effect=mock_sleep):
+        collector_up.run(max_iterations=2)
+
+    assert sleep_calls == 30
+
+
+def test_flapping_detection(tmp_path: Path) -> None:
+    """Link transitioning DOWN -> UP within FLAPPING_WINDOW_SECONDS is flagged as flapping."""
+    db = Database(tmp_path / "flapping.db")
+    db.initialize()
+
+    now = 1_700_000_000.0
+
+    mock_client = DummyRouterOSClient(
+        [
+            {"name": "WAN", "rx_bytes": 100_000, "tx_bytes": 200_000, "uptime": "1d"},
+            {"name": "WAN", "rx_bytes": 110_000, "tx_bytes": 210_000, "uptime": "1d"},
+        ],
+        timeout=15,
+    )
+
+    collector = TrafficCollector(
+        database=db,
+        client=mock_client,  # type: ignore[arg-type]
+        clock=lambda: now,
+    )
+
+    # 1. Brief outage: down 30s ago (within 120s window)
+    collector._is_currently_down = True
+    collector._last_down_epoch = now - 30.0
+    assert now - collector._last_down_epoch <= FLAPPING_WINDOW_SECONDS
+    sample = collector.poll_once()
+
+    assert sample is not None
+    assert collector._flapping_detected is True
+    assert "flapping" in collector._last_flapping_reason.lower()
+    assert collector._is_currently_down is False
+
+    # 2. Sustained outage: down 300s ago (> 120s window)
+    now += 500.0
+    collector._is_currently_down = True
+    collector._last_down_epoch = now - 300.0
+    assert now - collector._last_down_epoch > FLAPPING_WINDOW_SECONDS
+    sample2 = collector.poll_once()
+
+    assert sample2 is not None
+    assert collector._flapping_detected is False
+    assert collector._last_flapping_reason == ""
+    assert collector._is_currently_down is False
 

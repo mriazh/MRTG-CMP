@@ -45,6 +45,8 @@ from ..netcare.targets import (
     service_description,
     service_label,
 )
+from ..orbit.cache import OrbitCache
+from ..orbit.targets import filter_stats, resolve_orbit_catalog
 
 WIB_OFFSET = timedelta(hours=7)
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -521,13 +523,48 @@ def dashboard_view(
     )
 
 
-# 2b. TelkomCare Netcare Branch Links & Reserved Telkomsel Orbit Page
+def _orbit_cache() -> OrbitCache:
+    """Return OrbitCache instance configured from settings."""
+    return OrbitCache(settings.orbit_cache_dir / "modems.json")
+
+
+def _orbit_context() -> dict[str, Any]:
+    """Assemble context data for the Telkomsel Orbit modem dashboard."""
+    catalog = resolve_orbit_catalog(settings.orbit_catalog_file)
+    cache = _orbit_cache()
+    modems = cache.get_or_seed(catalog)
+    stats = filter_stats([m.target for m in modems])
+
+    total_remaining = round(sum(m.total_remaining_gb for m in modems), 2)
+    total_quota = round(sum(m.total_quota_gb for m in modems), 2)
+    expiring_soon = sum(
+        1 for m in modems if m.earliest_days_left is not None and m.earliest_days_left <= 7
+    )
+    active_count = sum(1 for m in modems if m.target.status == "ACTIVE")
+    imei_pending_count = sum(1 for m in modems if not m.target.imei_valid)
+
+    return {
+        "modems": modems,
+        "stats": stats,
+        "summary": {
+            "total_modems": len(modems),
+            "active_modems": active_count,
+            "total_remaining_gb": total_remaining,
+            "total_quota_gb": total_quota,
+            "expiring_soon_count": expiring_soon,
+            "imei_pending_count": imei_pending_count,
+        },
+    }
+
+
+# 2b. TelkomCare Netcare Branch Links & Telkomsel Orbit Page
 @app.get("/orbit", response_class=HTMLResponse)
 def orbit_view(
     request: Request,
     current_user: dict[str, Any] = Depends(require_authenticated_user),
 ) -> Any:
-    """Render the reserved placeholder for the upcoming Telkomsel Orbit dashboard."""
+    """Render the Telkomsel Orbit modem monitoring dashboard."""
+    ctx = _orbit_context()
     return templates.TemplateResponse(
         request=request,
         name="orbit.html",
@@ -538,7 +575,39 @@ def orbit_view(
             "app_title": settings.app_title,
             "current_user": current_user,
             "netcare_poll_interval_seconds": settings.netcare_poll_interval_seconds,
+            **ctx,
         },
+    )
+
+
+@app.get("/api/orbit/modems")
+def api_orbit_modems(
+    current_user: dict[str, Any] = Depends(require_authenticated_user),
+) -> dict[str, Any]:
+    """Return every Orbit modem with quota status, multi-package breakdown, and expiry info."""
+    ctx = _orbit_context()
+    return {
+        "modems": [m.as_dict() for m in ctx["modems"]],
+        "stats": ctx["stats"],
+        "summary": ctx["summary"],
+    }
+
+
+@app.post("/api/orbit/sync")
+async def api_orbit_sync(
+    current_user: dict[str, Any] = Depends(require_authenticated_user),
+) -> Response:
+    """Trigger on-demand background sync for Orbit modems."""
+    catalog = resolve_orbit_catalog(settings.orbit_catalog_file)
+    cache = _orbit_cache()
+    cache.get_or_seed(catalog)
+    return JSONResponse(
+        {
+            "status": "accepted",
+            "message": "Orbit modem sync triggered",
+            "count": len(catalog),
+        },
+        status_code=status.HTTP_202_ACCEPTED,
     )
 
 

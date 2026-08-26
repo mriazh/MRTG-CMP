@@ -10,43 +10,14 @@ from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
 
-from mrtg_cmp.auth import hash_password
 from mrtg_cmp.config import settings
-from mrtg_cmp.db import Database, TrafficSample
 from mrtg_cmp.netcare.targets import NetcareTarget
-from mrtg_cmp.web.app import app
 
 TEMPLATES_DIR = Path(__file__).resolve().parents[1] / "src" / "mrtg_cmp" / "web" / "templates"
 
 
-@pytest.fixture
-def client_with_db(tmp_path: Path) -> TestClient:
-    """Fixture providing a test client configured with a temporary database."""
-    test_db_path = tmp_path / "web_test.db"
-    db = Database(test_db_path)
-    db.initialize()
+# TestClient and client_with_db are provided by tests/conftest.py
 
-    # Seed test user
-    db.create_user("admin", hash_password("admin123"))
-
-    # Seed some sample traffic records
-    db.insert_traffic_sample(
-        TrafficSample(
-            timestamp="2026-09-15T08:00:00Z",
-            rx_bytes=100_000_000,
-            tx_bytes=50_000_000,
-            rx_bps=10_000_000.0,
-            tx_bps=5_000_000.0,
-            epoch=1789459200,
-            uptime="5d",
-            status="UP",
-        )
-    )
-
-    # Override app dependency
-    settings.database_path = test_db_path
-    client = TestClient(app, follow_redirects=False)
-    return client
 
 def test_login_page_renders(client_with_db: TestClient) -> None:
     """GET /login returns 200 with the HTML login form."""
@@ -461,8 +432,8 @@ def test_api_netcare_refresh_rejects_unknown_target(client_with_db: TestClient) 
 
     assert resp.status_code == 404
 
-def test_orbit_route_renders_placeholder(client_with_db: TestClient) -> None:
-    """GET /orbit is an authenticated placeholder for the Telkomsel Orbit dashboard."""
+def test_orbit_route_renders_dashboard(client_with_db: TestClient) -> None:
+    """GET /orbit is an authenticated view for the Telkomsel Orbit dashboard."""
     unauth = client_with_db.get("/orbit", headers={"Accept": "text/html"})
     assert unauth.status_code in (302, 303, 307)
     assert "/login" in unauth.headers.get("location", "")
@@ -472,7 +443,9 @@ def test_orbit_route_renders_placeholder(client_with_db: TestClient) -> None:
 
     assert resp.status_code == 200
     assert "Telkomsel Orbit" in resp.text
-    assert "Reserved" in resp.text or "reserved" in resp.text
+    assert "orbit-card" in resp.text
+    assert "Semua Modem" in resp.text
+    assert "Aktif di Ruangan" in resp.text
 
 def test_dashboard_renders_netcare_section(client_with_db: TestClient) -> None:
     """The unified dashboard renders the Netcare branch grid and filter pills."""

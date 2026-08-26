@@ -2,12 +2,31 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
 
 from pydantic import AliasChoices, Field, field_validator
-from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    NoDecode,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
+from pydantic_settings.sources import DotEnvSettingsSource
+
+
+class _PrecedenceDotEnvSource(DotEnvSettingsSource):
+    def _read_env_files(self) -> Mapping[str, str | None]:
+        if isinstance(self.env_file, (list, tuple)):
+            orig = self.env_file
+            self.env_file = list(reversed(orig))
+            try:
+                return super()._read_env_files()
+            finally:
+                self.env_file = orig
+        return super()._read_env_files()
 
 
 class Settings(BaseSettings):
@@ -19,7 +38,7 @@ class Settings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=("config/.env", ".env"),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
@@ -77,10 +96,18 @@ class Settings(BaseSettings):
         default="WAN",
         validation_alias=AliasChoices("routeros_interface", "router_interface", "interface"),
     )
+    routeros_timeout: int = Field(
+        default=15,
+        validation_alias=AliasChoices("routeros_timeout", "router_timeout"),
+    )
 
     polling_interval: int = Field(
         default=60,
         validation_alias=AliasChoices("polling_interval", "poll_interval"),
+    )
+    polling_interval_down: int = Field(
+        default=10,
+        validation_alias=AliasChoices("polling_interval_down", "poll_interval_down"),
     )
     web_host: str = "0.0.0.0"
     web_port: int = 8000
@@ -119,6 +146,13 @@ class Settings(BaseSettings):
     netcare_graph_timeout_seconds: int = 25
     netcare_capture_retries: int = 3
     netcare_workers: int = Field(default=3, ge=1, le=8)
+
+    # Telkomsel Orbit Modem Monitoring
+    orbit_enabled: bool = True
+    orbit_portal_url: str = "https://www.myorbit.id/informasi-modem-input"
+    orbit_catalog_file: Path | None = None
+    orbit_cache_dir: Path = Path("data/orbit_cache")
+    orbit_sync_interval_seconds: int = 1800
 
     # Gemini Vision multi-key CAPTCHA solving (comma separated in the environment).
     # Keep in step with VALID_GEMINI_VISION_MODELS in netcare/captcha.py: a name
@@ -178,6 +212,12 @@ class Settings(BaseSettings):
         return self.polling_interval
 
     @property
+    def poll_interval_down(self) -> int:
+        """Backward-compatible short name for down polling interval."""
+
+        return self.polling_interval_down
+
+    @property
     def db_path(self) -> Path:
         """Backward-compatible short name for the database path."""
 
@@ -188,6 +228,39 @@ class Settings(BaseSettings):
         """Backward-compatible property returning app_title."""
 
         return self.app_title
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        return (
+            init_settings,
+            env_settings,
+            _PrecedenceDotEnvSource(
+                settings_cls,
+                env_file=(
+                    dotenv_settings.env_file
+                    if isinstance(dotenv_settings, DotEnvSettingsSource)
+                    else None
+                ),
+                env_file_encoding=(
+                    dotenv_settings.env_file_encoding
+                    if isinstance(dotenv_settings, DotEnvSettingsSource)
+                    else None
+                ),
+                case_sensitive=(
+                    dotenv_settings.case_sensitive
+                    if isinstance(dotenv_settings, DotEnvSettingsSource)
+                    else None
+                ),
+            ),
+            file_secret_settings,
+        )
 
 
 @lru_cache

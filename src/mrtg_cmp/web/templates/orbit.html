@@ -5,30 +5,921 @@
 
 {% block title %}Telkomsel Orbit - {{ site_name | default("Enterprise Gateway") }}{% endblock %}
 
+{% block extra_styles %}
+.orbit-container {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+/* Header & Action Toolbar */
+.orbit-header-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.orbit-title-group h2 {
+    margin: 0;
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--text-main);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.orbit-subtitle {
+    margin: 0.25rem 0 0 0;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+.orbit-actions {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+}
+
+.btn-sync {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.55rem 1rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    background: var(--primary);
+    color: #FFFFFF;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.btn-sync:hover {
+    opacity: 0.9;
+}
+
+.btn-sync.loading {
+    pointer-events: none;
+    opacity: 0.7;
+}
+
+/* KPI Summary Cards */
+.orbit-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+}
+
+.orbit-kpi-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.orbit-kpi-label {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    letter-spacing: 0.04em;
+    margin-bottom: 0.35rem;
+}
+
+.orbit-kpi-value {
+    font-size: 1.5rem;
+    font-weight: 800;
+    color: var(--primary);
+}
+
+.orbit-kpi-subtext {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 0.25rem;
+}
+
+/* Filter Pills */
+.orbit-filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    background: var(--card-bg);
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+}
+
+.orbit-filter-label {
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    margin-right: 0.5rem;
+}
+
+.orbit-pill {
+    background: transparent;
+    border: 1px solid var(--border-color);
+    color: var(--text-main);
+    padding: 0.35rem 0.85rem;
+    border-radius: 20px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.orbit-pill:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+.orbit-pill.active {
+    background: var(--primary);
+    color: #FFFFFF;
+    border-color: var(--primary);
+}
+
+/* Card Grid */
+.orbit-card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+    gap: 1.25rem;
+}
+
+@media (min-width: 1400px) {
+    .orbit-card-grid {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}
+
+@media (max-width: 768px) {
+    .orbit-card-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.orbit-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.orbit-card:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.orbit-card-header {
+    background: var(--header-bg, rgba(0, 0, 0, 0.02));
+    padding: 0.85rem 1.15rem;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+    min-height: 48px;
+}
+
+.orbit-room-badge {
+    font-weight: 700;
+    font-size: 0.95rem;
+    color: var(--text-main);
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.orbit-status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.2rem 0.55rem;
+    border-radius: 12px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+}
+
+.orbit-status-pill.active {
+    background: rgba(16, 185, 129, 0.12);
+    color: #059669;
+    border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.orbit-status-pill.idle {
+    background: rgba(107, 114, 128, 0.12);
+    color: #4B5563;
+    border: 1px solid rgba(107, 114, 128, 0.3);
+}
+
+.orbit-status-pill.ex-customer {
+    background: rgba(239, 68, 68, 0.12);
+    color: #DC2626;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.orbit-status-pill.imei-pending {
+    background: rgba(245, 158, 11, 0.12);
+    color: #D97706;
+    border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.orbit-card-body {
+    padding: 1.15rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    flex: 1;
+}
+
+.orbit-specs-list {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.6rem 0.75rem;
+    font-size: 0.82rem;
+}
+
+.orbit-spec-item {
+    display: flex;
+    flex-direction: column;
+}
+
+.orbit-spec-label {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    font-weight: 600;
+}
+
+.orbit-spec-val {
+    font-family: monospace;
+    font-weight: 600;
+    color: var(--text-main);
+    word-break: break-all;
+}
+
+/* Quota Section */
+.orbit-quota-box {
+    background: rgba(0, 0, 0, 0.02);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 0.85rem;
+}
+
+.orbit-quota-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 0.4rem;
+}
+
+.orbit-quota-title {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+}
+
+.orbit-quota-pct {
+    font-size: 0.82rem;
+    font-weight: 700;
+}
+
+.orbit-progress-track {
+    width: 100%;
+    height: 10px;
+    background: var(--border-color);
+    border-radius: 5px;
+    overflow: hidden;
+    margin-bottom: 0.4rem;
+}
+
+.orbit-progress-fill {
+    height: 100%;
+    border-radius: 5px;
+    transition: width 0.4s ease;
+}
+
+.orbit-progress-fill.green { background: #10B981; }
+.orbit-progress-fill.amber { background: #F59E0B; }
+.orbit-progress-fill.red { background: #EF4444; }
+
+.orbit-quota-numbers {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.8rem;
+    color: var(--text-main);
+    font-weight: 600;
+}
+
+/* Expiry Badge */
+.orbit-expiry-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.35rem 0.65rem;
+    border-radius: 6px;
+    font-size: 0.78rem;
+    font-weight: 600;
+}
+
+.orbit-expiry-badge.safe {
+    background: rgba(16, 185, 129, 0.1);
+    color: #059669;
+    border: 1px solid rgba(16, 185, 129, 0.25);
+}
+
+.orbit-expiry-badge.soon {
+    background: rgba(245, 158, 11, 0.12);
+    color: #B45309;
+    border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.orbit-expiry-badge.critical {
+    background: rgba(239, 68, 68, 0.12);
+    color: #DC2626;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.orbit-expiry-badge.pending {
+    background: rgba(245, 158, 11, 0.1);
+    color: #B45309;
+    border: 1px dashed rgba(245, 158, 11, 0.4);
+}
+
+.orbit-expiry-badge.inactive {
+    background: rgba(107, 114, 128, 0.1);
+    color: #6B7280;
+    border: 1px solid rgba(107, 114, 128, 0.2);
+}
+
+.orbit-card-footer {
+    margin-top: auto;
+    padding: 0.75rem 1.15rem;
+    border-top: 1px solid var(--border-color);
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+}
+
+.btn-detail {
+    background: transparent;
+    border: 1px solid var(--border-color);
+    color: var(--primary);
+    padding: 0.35rem 0.8rem;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.btn-detail:hover:not(:disabled) {
+    background: var(--primary);
+    color: #FFFFFF;
+    border-color: var(--primary);
+}
+
+.btn-detail:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Package Modal */
+.orbit-modal-backdrop {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 1050;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    backdrop-filter: blur(2px);
+}
+
+.orbit-modal-backdrop.open {
+    display: flex;
+}
+
+.orbit-modal {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
+    max-width: 680px;
+    width: 100%;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    animation: modalFadeIn 0.15s ease-out;
+}
+
+@keyframes modalFadeIn {
+    from { opacity: 0; transform: scale(0.96); }
+    to { opacity: 1; transform: scale(1); }
+}
+
+.orbit-modal-header {
+    background: var(--header-bg, rgba(0, 0, 0, 0.02));
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.orbit-modal-title {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--text-main);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.orbit-modal-close {
+    background: transparent;
+    border: none;
+    font-size: 1.4rem;
+    color: var(--text-muted);
+    cursor: pointer;
+    line-height: 1;
+    padding: 0.2rem 0.5rem;
+}
+
+.orbit-modal-close:hover {
+    color: var(--text-main);
+}
+
+.orbit-modal-body {
+    padding: 1.25rem;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.orbit-modal-summary {
+    background: rgba(0, 0, 0, 0.02);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 0.85rem;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+}
+
+.orbit-package-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.orbit-package-item {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 0.85rem 1rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.orbit-pkg-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.orbit-pkg-name {
+    font-weight: 700;
+    font-size: 0.92rem;
+    color: var(--text-main);
+}
+
+.orbit-pkg-expiry {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+}
+
+.orbit-pkg-quota {
+    text-align: right;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.orbit-pkg-rem {
+    font-weight: 800;
+    font-size: 1rem;
+    color: var(--primary);
+}
+
+.orbit-pkg-total {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.orbit-toast {
+    position: fixed;
+    bottom: 2rem;
+    right: 2rem;
+    background: #065F46;
+    color: #FFFFFF;
+    padding: 0.75rem 1.25rem;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 0.85rem;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    display: none;
+    z-index: 2000;
+}
+{% endblock %}
+
 {% block content %}
-<div class="card">
-    <div class="card-header">
-        <h2>Telkomsel Orbit</h2>
-    </div>
-    <div class="card-body">
-        <div class="alert alert-success" style="margin-bottom: 1rem;">
-            <strong>Reserved.</strong> This page is a placeholder for the upcoming Telkomsel
-            Orbit 20x modem monitoring dashboard. Navigation is already in place so the
-            Orbit view can be enabled without a URL change.
+<div class="orbit-container">
+    <!-- Header Toolbar -->
+    <div class="orbit-header-bar">
+        <div class="orbit-title-group">
+            <h2>📡 Telkomsel Orbit Modem Monitoring</h2>
+            <p class="orbit-subtitle">Monitoring kuota multi-package, masa berlaku paket, dan inventaris modem Orbit</p>
         </div>
+        <div class="orbit-actions">
+            <button id="btn-sync-orbit" class="btn-sync" type="button" title="Sinkronisasi data kuota Orbit sekarang">
+                <span id="sync-icon">🔄</span>
+                <span id="sync-text">Sync Orbit Now</span>
+            </button>
+        </div>
+    </div>
 
-        <p style="font-size: 0.9rem; color: var(--text-muted);">
-            The unified <a href="/">MRTG Monitoring</a> dashboard currently covers two
-            sources: live MikroTik WAN telemetry polled every 30 seconds, and the
-            TelkomCare Netcare branch graphs refreshed every
-            {{ netcare_poll_interval_seconds if netcare_poll_interval_seconds else 300 }} seconds.
-            Orbit modem metrics will appear here as a third section.
-        </p>
+    <!-- Summary KPI Counters -->
+    <div class="orbit-kpi-grid">
+        <div class="orbit-kpi-card">
+            <div class="orbit-kpi-label">Total Modem</div>
+            <div class="orbit-kpi-value">{{ summary.total_modems }}</div>
+            <div class="orbit-kpi-subtext">Inventaris terdaftar</div>
+        </div>
+        <div class="orbit-kpi-card">
+            <div class="orbit-kpi-label">Aktif di Ruangan</div>
+            <div class="orbit-kpi-value">{{ summary.active_modems }}</div>
+            <div class="orbit-kpi-subtext">Modem beroperasi</div>
+        </div>
+        <div class="orbit-kpi-card">
+            <div class="orbit-kpi-label">Total Sisa Kuota</div>
+            <div class="orbit-kpi-value">{{ summary.total_remaining_gb }} GB</div>
+            <div class="orbit-kpi-subtext">Dari total {{ summary.total_quota_gb }} GB</div>
+        </div>
+        <div class="orbit-kpi-card">
+            <div class="orbit-kpi-label">Expired Segera</div>
+            <div class="orbit-kpi-value" style="color: {% if summary.expiring_soon_count > 0 %}#F59E0B{% else %}var(--primary){% endif %};">
+                {{ summary.expiring_soon_count }}
+            </div>
+            <div class="orbit-kpi-subtext">&le; 7 hari ke depan</div>
+        </div>
+        <div class="orbit-kpi-card">
+            <div class="orbit-kpi-label">IMEI Pending</div>
+            <div class="orbit-kpi-value" style="color: {% if summary.imei_pending_count > 0 %}#DC2626{% else %}var(--primary){% endif %};">
+                {{ summary.imei_pending_count }}
+            </div>
+            <div class="orbit-kpi-subtext">ID 10-digit butuh 15-digit IMEI</div>
+        </div>
+    </div>
 
-        <div style="display: flex; gap: 0.5rem; margin-top: 1.25rem; flex-wrap: wrap;">
-            <a href="/" class="btn btn-primary">Back to MRTG Monitoring</a>
-            <a href="/console" class="btn btn-secondary">Web Console</a>
+    <!-- Filter Pills -->
+    <div class="orbit-filter-bar">
+        <span class="orbit-filter-label">Filter:</span>
+        <button class="orbit-pill active" data-filter="all" type="button">
+            Semua Modem ({{ stats.all }})
+        </button>
+        <button class="orbit-pill" data-filter="active" type="button">
+            Aktif di Ruangan ({{ stats.active }})
+        </button>
+        <button class="orbit-pill" data-filter="idle" type="button">
+            Cadangan / IDLE ({{ stats.idle }})
+        </button>
+        <button class="orbit-pill" data-filter="ex_customer" type="button">
+            Bekas ({{ stats.ex_customer }})
+        </button>
+    </div>
+
+    <!-- Modem Cards Grid -->
+    <div class="orbit-card-grid" id="orbit-grid">
+        {% for m in modems %}
+        {% set rem = m.total_remaining_gb %}
+        {% set tot = m.total_quota_gb %}
+        {% set pct = (rem / tot * 100) | round(1) if tot > 0 else 0.0 %}
+        {% set fill_color = 'green' if pct >= 30 else ('amber' if pct >= 10 else 'red') %}
+        <div class="orbit-card" data-status="{{ m.target.status | lower }}" data-imei-valid="{{ 'true' if m.target.imei_valid else 'false' }}">
+            <div class="orbit-card-header">
+                <div class="orbit-room-badge" title="{{ m.target.location }}">
+                    📍 {{ m.target.location }}
+                </div>
+                <div>
+                    {% if not m.target.imei_valid %}
+                        <span class="orbit-status-pill imei-pending" title="ID 10-digit membutuhkan 15 digit IMEI">⚠️ IMEI Pending</span>
+                    {% elif m.target.status == 'ACTIVE' %}
+                        <span class="orbit-status-pill active">🟢 Active</span>
+                    {% elif m.target.status == 'IDLE' %}
+                        <span class="orbit-status-pill idle">⚪ IDLE</span>
+                    {% elif m.target.status == 'EX_CUSTOMER' %}
+                        <span class="orbit-status-pill ex-customer">🔴 Bekas</span>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="orbit-card-body">
+                <div class="orbit-specs-list">
+                    <div class="orbit-spec-item">
+                        <span class="orbit-spec-label">No. Telepon</span>
+                        <span class="orbit-spec-val">{{ m.target.phone }}</span>
+                    </div>
+                    <div class="orbit-spec-item">
+                        <span class="orbit-spec-label">SSID Modem</span>
+                        <span class="orbit-spec-val">{{ m.target.ssid }}</span>
+                    </div>
+                    <div class="orbit-spec-item" style="grid-column: span 2;">
+                        <span class="orbit-spec-label">IMEI</span>
+                        <span class="orbit-spec-val">
+                            {{ m.target.imei }}
+                            {% if not m.target.imei_valid %}
+                                <span style="color: #D97706; font-size: 0.75rem;">(10 digit ID)</span>
+                            {% endif %}
+                        </span>
+                    </div>
+                </div>
+
+                <!-- Quota Box -->
+                <div class="orbit-quota-box">
+                    <div class="orbit-quota-header">
+                        <span class="orbit-quota-title">Sisa Kuota Internet</span>
+                        <span class="orbit-quota-pct" style="color: {% if pct >= 30 %}#10B981{% elif pct >= 10 %}#F59E0B{% else %}#EF4444{% endif %};">
+                            {% if m.target.imei_valid and tot > 0 %}{{ pct }}% Tersisa{% elif not m.target.imei_valid %}-{% else %}0%{% endif %}
+                        </span>
+                    </div>
+                    <div class="orbit-progress-track">
+                        <div class="orbit-progress-fill {{ fill_color }}" style="width: {% if m.target.imei_valid and tot > 0 %}{{ pct }}{% else %}0{% endif %}%;"></div>
+                    </div>
+                    <div class="orbit-quota-numbers">
+                        <span>
+                            {% if m.target.imei_valid and tot > 0 %}
+                                <strong>{{ rem }} GB</strong> / {{ tot }} GB
+                            {% elif not m.target.imei_valid %}
+                                <em style="color: var(--text-muted);">Menunggu input IMEI</em>
+                            {% else %}
+                                <strong>0.0 GB</strong> / 0.0 GB
+                            {% endif %}
+                        </span>
+                    </div>
+                </div>
+
+                <!-- Expiry Badge -->
+                <div>
+                    {% if not m.target.imei_valid %}
+                        <span class="orbit-expiry-badge pending">
+                            ⚠️ IMEI Pending (15 digit dibutuhkan)
+                        </span>
+                    {% elif m.target.status == 'EX_CUSTOMER' %}
+                        <span class="orbit-expiry-badge inactive">
+                            🔴 Unit Bekas / Non-Aktif
+                        </span>
+                    {% elif m.earliest_expiry_str and m.earliest_days_left is not none %}
+                        {% set days = m.earliest_days_left %}
+                        <span class="orbit-expiry-badge {% if days > 14 %}safe{% elif days > 3 %}soon{% else %}critical{% endif %}">
+                            ⏳ Expired terdekat: {{ m.earliest_expiry_str }} ({{ days }} hari lagi)
+                        </span>
+                    {% elif m.earliest_expiry_str %}
+                        <span class="orbit-expiry-badge safe">
+                            ⏳ Expired: {{ m.earliest_expiry_str }}
+                        </span>
+                    {% else %}
+                        <span class="orbit-expiry-badge inactive">
+                            ⏳ Masa aktif tidak tersedia
+                        </span>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="orbit-card-footer">
+                <button class="btn-detail" type="button"
+                    data-no="{{ m.target.no }}"
+                    data-room="{{ m.target.location }}"
+                    data-phone="{{ m.target.phone }}"
+                    data-ssid="{{ m.target.ssid }}"
+                    data-packages='{{ m.packages_json | e }}'
+                    {% if not m.target.imei_valid or not m.packages %}disabled{% endif %}>
+                    📦 Lihat Rincian Paket ({{ m.packages | length }})
+                </button>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- Multi-Package Modal -->
+<div class="orbit-modal-backdrop" id="orbit-modal-backdrop" aria-hidden="true" role="dialog">
+    <div class="orbit-modal" role="document">
+        <div class="orbit-modal-header">
+            <div class="orbit-modal-title">
+                <span>📦</span>
+                <span id="modal-title-text">Rincian Paket Orbit</span>
+            </div>
+            <button class="orbit-modal-close" id="btn-close-modal" type="button" aria-label="Tutup">&times;</button>
+        </div>
+        <div class="orbit-modal-body">
+            <div class="orbit-modal-summary">
+                <div>Lokasi: <strong id="modal-room">-</strong></div>
+                <div>No. Telepon: <strong id="modal-phone">-</strong></div>
+                <div>SSID: <strong id="modal-ssid">-</strong></div>
+                <div>Total Paket: <strong id="modal-pkg-count">0</strong></div>
+            </div>
+            <h4 style="margin: 0.5rem 0 0 0; font-size: 0.95rem; font-weight: 700; color: var(--text-main);">Daftar Paket Aktif</h4>
+            <div class="orbit-package-list" id="modal-package-list">
+                <!-- Package items inserted by JS -->
+            </div>
         </div>
     </div>
 </div>
+
+<!-- Notification Toast -->
+<div class="orbit-toast" id="orbit-toast">Sinkronisasi kuota Orbit berhasil dimulai!</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    // 1. Filter Pills
+    const filterPills = document.querySelectorAll('.orbit-pill');
+    const cards = document.querySelectorAll('.orbit-card');
+
+    filterPills.forEach(pill => {
+        pill.addEventListener('click', () => {
+            filterPills.forEach(p => p.classList.remove('active'));
+            pill.classList.add('active');
+
+            const filter = pill.getAttribute('data-filter');
+            cards.forEach(card => {
+                const status = card.getAttribute('data-status');
+                if (filter === 'all') {
+                    card.style.display = '';
+                } else if (filter === 'active') {
+                    card.style.display = (status === 'active') ? '' : 'none';
+                } else if (filter === 'idle') {
+                    card.style.display = (status === 'idle') ? '' : 'none';
+                } else if (filter === 'ex_customer') {
+                    card.style.display = (status === 'ex_customer') ? '' : 'none';
+                }
+            });
+        });
+    });
+
+    // 2. Package Details Modal
+    const backdrop = document.getElementById('orbit-modal-backdrop');
+    const closeBtn = document.getElementById('btn-close-modal');
+    const modalRoom = document.getElementById('modal-room');
+    const modalPhone = document.getElementById('modal-phone');
+    const modalSsid = document.getElementById('modal-ssid');
+    const modalPkgCount = document.getElementById('modal-pkg-count');
+    const pkgList = document.getElementById('modal-package-list');
+
+    function closeModal() {
+        backdrop.classList.remove('open');
+        backdrop.setAttribute('aria-hidden', 'true');
+    }
+
+    if (closeBtn) {
+        closeBtn.addEventListener('click', closeModal);
+    }
+
+    if (backdrop) {
+        backdrop.addEventListener('click', (e) => {
+            if (e.target === backdrop) closeModal();
+        });
+    }
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && backdrop.classList.contains('open')) {
+            closeModal();
+        }
+    });
+
+    document.querySelectorAll('.btn-detail').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const room = btn.getAttribute('data-room');
+            const phone = btn.getAttribute('data-phone');
+            const ssid = btn.getAttribute('data-ssid');
+            const packagesRaw = btn.getAttribute('data-packages');
+
+            modalRoom.textContent = room || '-';
+            modalPhone.textContent = phone || '-';
+            modalSsid.textContent = ssid || '-';
+
+            let packages = [];
+            try {
+                packages = JSON.parse(packagesRaw || '[]');
+            } catch (err) {
+                console.error('Failed parsing packages JSON', err);
+            }
+
+            modalPkgCount.textContent = packages.length;
+            pkgList.innerHTML = '';
+
+            if (packages.length === 0) {
+                pkgList.innerHTML = '<div style="color: var(--text-muted); font-size: 0.85rem; padding: 1rem; text-align: center;">Tidak ada rincian paket tersedia.</div>';
+            } else {
+                packages.forEach(p => {
+                    const item = document.createElement('div');
+                    item.className = 'orbit-package-item';
+
+                    let daysBadge = '';
+                    if (p.days_left !== null && p.days_left !== undefined) {
+                        const badgeColor = p.days_left > 14 ? '#059669' : (p.days_left > 3 ? '#B45309' : '#DC2626');
+                        daysBadge = ` <span style="color: ${badgeColor}; font-weight: 700;">(${p.days_left} hari lagi)</span>`;
+                    }
+
+                    item.innerHTML = `
+                        <div class="orbit-pkg-info">
+                            <span class="orbit-pkg-name">${p.name || 'Paket Orbit'}</span>
+                            <span class="orbit-pkg-expiry">Berlaku s.d: <strong>${p.expiry_str || '-'}</strong>${daysBadge}</span>
+                        </div>
+                        <div class="orbit-pkg-quota">
+                            <span class="orbit-pkg-rem">${p.remaining_gb} GB</span>
+                            <span class="orbit-pkg-total">dari ${p.total_gb} GB</span>
+                        </div>
+                    `;
+                    pkgList.appendChild(item);
+                });
+            }
+
+            backdrop.classList.add('open');
+            backdrop.setAttribute('aria-hidden', 'false');
+        });
+    });
+
+    // 3. Sync Button
+    const syncBtn = document.getElementById('btn-sync-orbit');
+    const syncIcon = document.getElementById('sync-icon');
+    const syncText = document.getElementById('sync-text');
+    const toast = document.getElementById('orbit-toast');
+
+    function showToast(msg) {
+        if (!toast) return;
+        toast.textContent = msg;
+        toast.style.display = 'block';
+        setTimeout(() => {
+            toast.style.display = 'none';
+        }, 3500);
+    }
+
+    if (syncBtn) {
+        syncBtn.addEventListener('click', async () => {
+            syncBtn.classList.add('loading');
+            syncIcon.textContent = '⏳';
+            syncText.textContent = 'Sinkronisasi...';
+
+            try {
+                const resp = await fetch('/api/orbit/sync', {
+                    method: 'POST',
+                    headers: { 'Accept': 'application/json' }
+                });
+                if (resp.ok) {
+                    showToast('✅ Sinkronisasi kuota Orbit berhasil dimulai!');
+                } else {
+                    showToast('⚠️ Gagal sinkronisasi kuota Orbit');
+                }
+            } catch (err) {
+                console.error('Sync error', err);
+                showToast('❌ Kesalahan jaringan saat sinkronisasi');
+            } finally {
+                setTimeout(() => {
+                    syncBtn.classList.remove('loading');
+                    syncIcon.textContent = '🔄';
+                    syncText.textContent = 'Sync Orbit Now';
+                }, 1200);
+            }
+        });
+    }
+});
+</script>
 {% endblock %}

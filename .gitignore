@@ -20,7 +20,10 @@ ENV/
 # Environment configuration
 .env
 .env.*
+config/.env
+config/.env.*
 !.env.example
+!config/.env.example
 
 # Runtime databases and operational data
 data/*.db
@@ -32,10 +35,19 @@ data/*.db-wal
 # TelkomCare scraper runtime artifacts (graph cache, status manifest, session cookies)
 data/netcare_cache/
 
+# Telkomsel Orbit scraper runtime artifacts (quota cache, status manifest)
+data/orbit_cache/
+
 # Local Netcare target catalog: holds the deployment's own circuit IDs, branch
 # names, and facility addresses. The committed config/netcare_targets.csv.example
 # carries the anonymous catalog instead.
 /config/netcare_targets.csv
+
+# Local Telkomsel Orbit modem catalog: holds private customer phone numbers and
+# hardware IMEIs. The committed config/orbit_targets.csv.example carries the
+# anonymous mock catalog instead.
+/config/orbit_*.xlsx
+/config/orbit_targets.csv
 
 # Packaging, builds, and distributions
 *.egg-info/

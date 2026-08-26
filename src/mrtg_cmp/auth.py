@@ -57,13 +57,16 @@ def ensure_admin_user(
     db.initialize()
 
     admin_username = config.admin_username
+    admin_password = (
+        config.admin_password.strip() if config.admin_password is not None else None
+    )
+
     existing = db.get_user(admin_username)
     if existing is not None:
-        # Rotate the stored hash when the configured admin password changes
-        if config.admin_password and not verify_password(
-            config.admin_password, existing["password_hash"]
+        if admin_password and not verify_password(
+            admin_password, existing["password_hash"]
         ):
-            hashed = hash_password(config.admin_password)
+            hashed = hash_password(admin_password)
             existing_id = int(existing["id"])
             with db.connection() as connection, connection:
                 connection.execute(
@@ -78,8 +81,7 @@ def ensure_admin_user(
             return rotated
         return existing
 
-    # Default initial password if not specified via environment
-    initial_password = config.admin_password or "admin123"
+    initial_password = admin_password or "admin123"
     hashed = hash_password(initial_password)
     user_id = db.create_user(username=admin_username, password_hash=hashed)
     user = db.get_user_by_id(user_id)
