@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, Form, Query, Request, status
+from fastapi import BackgroundTasks, Depends, FastAPI, Form, Query, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -46,6 +47,7 @@ from ..netcare.targets import (
     service_label,
 )
 from ..orbit.cache import OrbitCache
+from ..orbit.service import OrbitService
 from ..orbit.targets import filter_stats, resolve_orbit_catalog
 
 WIB_OFFSET = timedelta(hours=7)
@@ -528,6 +530,19 @@ def _orbit_cache() -> OrbitCache:
     return OrbitCache(settings.orbit_cache_dir / "modems.json")
 
 
+_orbit_service_instance: OrbitService | None = None
+_orbit_service_lock = threading.Lock()
+
+
+def _orbit_service() -> OrbitService:
+    """Return singleton OrbitService instance."""
+    global _orbit_service_instance
+    with _orbit_service_lock:
+        if _orbit_service_instance is None:
+            _orbit_service_instance = OrbitService()
+        return _orbit_service_instance
+
+
 def _orbit_context() -> dict[str, Any]:
     """Assemble context data for the Telkomsel Orbit modem dashboard."""
     catalog = resolve_orbit_catalog(settings.orbit_catalog_file)
@@ -595,16 +610,18 @@ def api_orbit_modems(
 
 @app.post("/api/orbit/sync")
 async def api_orbit_sync(
+    background_tasks: BackgroundTasks,
     current_user: dict[str, Any] = Depends(require_authenticated_user),
 ) -> Response:
     """Trigger on-demand background sync for Orbit modems."""
     catalog = resolve_orbit_catalog(settings.orbit_catalog_file)
     cache = _orbit_cache()
-    cache.get_or_seed(catalog)
+    service = _orbit_service()
+    background_tasks.add_task(service.sync_in_background, catalog, cache)
     return JSONResponse(
         {
             "status": "accepted",
-            "message": "Orbit modem sync triggered",
+            "message": "Live Orbit sync started in background",
             "count": len(catalog),
         },
         status_code=status.HTTP_202_ACCEPTED,

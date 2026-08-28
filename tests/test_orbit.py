@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import MagicMock
+from typing import Any
+from unittest.mock import MagicMock, patch
 
 from starlette.testclient import TestClient
 
+from mrtg_cmp.cli import main
 from mrtg_cmp.orbit.cache import OrbitCache
 from mrtg_cmp.orbit.scraper import (
     OrbitModemStatus,
@@ -18,6 +20,7 @@ from mrtg_cmp.orbit.scraper import (
     parse_package_cards_html,
     parse_quota_string,
 )
+from mrtg_cmp.orbit.service import OrbitService, build_orbit_driver
 from mrtg_cmp.orbit.targets import (
     OrbitModem,
     _default_orbit_catalog,
@@ -141,7 +144,27 @@ def test_resolve_orbit_catalog_fallback(tmp_path: Path) -> None:
 
 
 def test_parse_quota_string() -> None:
-    """Parses various quota text combinations."""
+    """Parses various quota text combinations with priority for Sisa."""
+    # Priority Sisa pattern with stray numbers in text
+    stray_script_text = (
+        "<script>ratio = 8.0 / 8.0;</script>\n"
+        "Kuota Internet\n"
+        "Sisa 85.29GB / 85.29GB"
+    )
+    rem, tot = parse_quota_string(stray_script_text)
+    assert rem == 85.29
+    assert tot == 85.29
+
+    # Sisa with comma and whitespace
+    rem, tot = parse_quota_string("Sisa 85,29 GB / 85,29 GB")
+    assert rem == 85.29
+    assert tot == 85.29
+
+    # Sisa with MB to GB
+    rem, tot = parse_quota_string("Sisa 500MB / 10GB")
+    assert rem == 0.49
+    assert tot == 10.0
+
     rem, tot = parse_quota_string("28.56GB / 30GB")
     assert rem == 28.56
     assert tot == 30.0
@@ -159,6 +182,16 @@ def test_parse_quota_string() -> None:
     rem, tot = parse_quota_string("512 MB / 10 GB")
     assert rem == 0.5
     assert tot == 10.0
+
+    # Single remaining pattern
+    rem, tot = parse_quota_string("50GB")
+    assert rem == 50.0
+    assert tot == 50.0
+
+    # Stray dots or invalid characters from live probe findings
+    assert parse_quota_string(".") == (0.0, 0.0)
+    assert parse_quota_string("...") == (0.0, 0.0)
+    assert parse_quota_string(". GB / . GB") == (0.0, 0.0)
 
     # Empty or unparseable
     assert parse_quota_string("") == (0.0, 0.0)
@@ -233,6 +266,47 @@ def test_parse_package_cards_html() -> None:
     assert p2.days_left == 21
 
 
+def test_parse_package_cards_text_format() -> None:
+    """Parses plain-text package list rendered on prabayar-info-kuota."""
+    ref_now = datetime(2026, 10, 1, tzinfo=UTC)
+    rendered_text = """
+    Paket Data Saya
+    Internet Quota
+    Kuota FantaSIX
+    25GB
+    / 25GB
+    Berlaku s.d 13 Oct 2026
+    Kuota FantaSIX
+    25GB
+    / 25GB
+    Berlaku s.d 14 Oct 2026
+    Internet Orbit
+    35GB
+    / 35GB
+    Berlaku s.d 14 Oct 2026
+    """
+    packages = parse_package_cards_html(rendered_text, now=ref_now)
+    assert len(packages) == 3
+
+    assert packages[0].name == "Kuota FantaSIX"
+    assert packages[0].remaining_gb == 25.0
+    assert packages[0].total_gb == 25.0
+    assert packages[0].expiry_str == "13 Oct 2026"
+    assert packages[0].days_left == 12
+
+    assert packages[1].name == "Kuota FantaSIX"
+    assert packages[1].remaining_gb == 25.0
+    assert packages[1].total_gb == 25.0
+    assert packages[1].expiry_str == "14 Oct 2026"
+    assert packages[1].days_left == 13
+
+    assert packages[2].name == "Internet Orbit"
+    assert packages[2].remaining_gb == 35.0
+    assert packages[2].total_gb == 35.0
+    assert packages[2].expiry_str == "14 Oct 2026"
+    assert packages[2].days_left == 13
+
+
 def test_orbit_scraper_invalid_imei_and_ex_customer_skips_portal() -> None:
     """Modems with invalid IMEI or EX_CUSTOMER status resolve without driver calls."""
     scraper = OrbitScraper()
@@ -260,9 +334,60 @@ def test_orbit_scraper_with_mock_driver() -> None:
     modem = OrbitModem(2, "860000000000002", "081200000002", "Room B", "Orbit-B")
 
     mock_driver = MagicMock()
+    phone_input = MagicMock()
+    imei_input = MagicMock()
+    lanjut_btn = MagicMock()
+    lanjut_btn.text = "Lanjutkan"
+    cek_btn = MagicMock()
+    cek_btn.text = "Cek Kuota"
+    detail_btn = MagicMock()
+    detail_btn.text = "Lihat Detail"
+
+    body_modem = MagicMock()
+    body_modem.text = """
+    Nama WiFi
+    tselhome-8BCB
+    Total Kuota: 28.56 GB / 30 GB
+    Lihat Detail
+    """
+
+    body_kuota = MagicMock()
+    body_kuota.text = """
+    Internet Orbit 30GB
+    28.56GB
+    / 30GB
+    Berlaku s.d 08 Oct 2026
+    """
+
+    current_page = ["prabayar-info-modem"]
+    mock_driver.current_url = "https://www.myorbit.id/prabayar-info-modem"
+
+    def mock_find_element(by: str, value: str) -> Any:
+        if by == "tag name" and value == "body":
+            if current_page[0] == "prabayar-info-modem":
+                return body_modem
+            return body_kuota
+        if "Cek Kuota" in value:
+            return cek_btn
+        return MagicMock()
+
+    def mock_find_elements(by: str, value: str) -> list[Any]:
+        if by == "tag name" and value == "input":
+            return [phone_input, imei_input]
+        if by == "tag name" and value == "button":
+            return [lanjut_btn]
+        if "Cek Kuota" in value:
+            return [cek_btn]
+        if "Lihat Detail" in value or value == "//button | //a":
+            return [detail_btn]
+        return []
+
+    mock_driver.find_element.side_effect = mock_find_element
+    mock_driver.find_elements.side_effect = mock_find_elements
     mock_driver.page_source = """
     <div>
         <h2>Info Kuota</h2>
+        <div class="wifi-name">tselhome-8BCB</div>
         <div class="quota-total">28.56 GB / 30 GB</div>
         <div class="package-item">
             <span class="name">Internet Orbit 30GB</span>
@@ -272,6 +397,14 @@ def test_orbit_scraper_with_mock_driver() -> None:
     </div>
     """
 
+    def mock_execute_script(script: str, *args: Any) -> Any:
+        if args and args[0] is detail_btn:
+            current_page[0] = "prabayar-info-kuota"
+            mock_driver.current_url = "https://www.myorbit.id/prabayar-info-kuota"
+        return None
+
+    mock_driver.execute_script.side_effect = mock_execute_script
+
     status = scraper.scrape_modem(modem, driver=mock_driver, now=ref_now)
     assert status.error is None
     assert status.total_remaining_gb == 28.56
@@ -280,6 +413,241 @@ def test_orbit_scraper_with_mock_driver() -> None:
     assert status.earliest_days_left == 7
     assert len(status.packages) >= 1
     assert "Internet Orbit" in status.packages[0].name
+    assert modem.ssid == "tselhome-8BCB"
+    phone_input.send_keys.assert_called_with("081200000002")
+    imei_input.send_keys.assert_called_with("860000000000002")
+    assert mock_driver.execute_script.call_count >= 2
+
+
+def test_orbit_scraper_with_live_probe_rendered_text() -> None:
+    """Simulates live probe flow with stray script numbers, DOM text, and navigation."""
+    ref_now = datetime(2026, 10, 1, tzinfo=UTC)
+    scraper = OrbitScraper()
+    modem = OrbitModem(1, "860000000000001", "6281367149931", "Room 101", "Old_SSID")
+
+    mock_driver = MagicMock()
+    phone_input = MagicMock()
+    imei_input = MagicMock()
+    lanjut_btn = MagicMock()
+    lanjut_btn.text = "Lanjutkan"
+    cek_btn = MagicMock()
+    detail_btn = MagicMock()
+    detail_btn.text = "Lihat Detail"
+
+    body_modem = MagicMock()
+    body_modem.text = """
+    Nama WiFi
+    tselhome-8BCB
+    6281367149931
+    Kuota Internet
+    Sisa 85.29GB / 85.29GB
+    Kuota Multimedia
+    Tidak ada kuota multimedia aktif
+    Lihat Detail
+    """
+
+    body_kuota = MagicMock()
+    body_kuota.text = """
+    Paket Data Saya
+    Internet Quota
+    Kuota FantaSIX
+    25GB
+    / 25GB
+    Berlaku s.d 13 Oct 2026
+    Kuota FantaSIX
+    25GB
+    / 25GB
+    Berlaku s.d 14 Oct 2026
+    Internet Orbit
+    35GB
+    / 35GB
+    Berlaku s.d 14 Oct 2026
+    """
+
+    current_page = ["prabayar-info-modem"]
+
+    def mock_find_element(by: str, value: str) -> Any:
+        if by == "tag name" and value == "body":
+            if current_page[0] == "prabayar-info-modem":
+                return body_modem
+            return body_kuota
+        return MagicMock()
+
+    def mock_find_elements(by: str, value: str) -> list[Any]:
+        if by == "tag name" and value == "input":
+            return [phone_input, imei_input]
+        if by == "tag name" and value == "button":
+            return [lanjut_btn]
+        if "Cek Kuota" in value:
+            return [cek_btn]
+        if "Lihat Detail" in value or value == "//button | //a":
+            return [detail_btn]
+        if "Paket Data Saya" in value:
+            return [MagicMock()]
+        return []
+
+    mock_driver.find_element.side_effect = mock_find_element
+    mock_driver.find_elements.side_effect = mock_find_elements
+    # page_source has stray 8.0 / 8.0 script number
+    mock_driver.page_source = "<script>var ratio = 8.0 / 8.0;</script>"
+    mock_driver.current_url = "https://www.myorbit.id/prabayar-info-modem"
+
+    def mock_execute_script(script: str, *args: Any) -> Any:
+        if args and args[0] is detail_btn:
+            current_page[0] = "prabayar-info-kuota"
+            mock_driver.current_url = "https://www.myorbit.id/prabayar-info-kuota"
+        return None
+
+    mock_driver.execute_script.side_effect = mock_execute_script
+
+    status = scraper.scrape_modem(modem, driver=mock_driver, now=ref_now)
+    assert status.error is None
+    assert status.total_remaining_gb == 85.29
+    assert status.total_quota_gb == 85.29
+    assert modem.ssid == "tselhome-8BCB"
+    assert len(status.packages) == 3
+    assert status.packages[0].name == "Kuota FantaSIX"
+    assert status.packages[0].remaining_gb == 25.0
+    assert status.packages[1].name == "Kuota FantaSIX"
+    assert status.packages[2].name == "Internet Orbit"
+    assert status.earliest_expiry_str == "13 Oct 2026"
+    assert status.earliest_days_left == 12
+
+
+def test_orbit_scraper_less_than_two_inputs_returns_error() -> None:
+    """When fewer than 2 input tags are located, LookupError is recorded in status."""
+    scraper = OrbitScraper()
+    modem = OrbitModem(2, "860000000000002", "081200000002", "Room B", "Orbit-B")
+    mock_driver = MagicMock()
+    mock_driver.find_elements.return_value = [MagicMock()]  # only 1 input field
+
+    status = scraper.scrape_modem(modem, driver=mock_driver)
+    assert status.error is not None
+    assert "Expected at least 2 input fields" in status.error
+
+
+def test_orbit_scraper_real_probe_scenario() -> None:
+    """Verifies parsing of the probe scenario with 5 packages."""
+    ref_now = datetime(2026, 10, 1, tzinfo=UTC)
+    scraper = OrbitScraper()
+    modem = OrbitModem(1, "860000000000099", "081200000099", "Demo Site", "OldSSID")
+
+    mock_driver = MagicMock()
+    phone_input = MagicMock()
+    imei_input = MagicMock()
+    lanjut_btn = MagicMock()
+    lanjut_btn.text = "Lanjutkan"
+    cek_btn = MagicMock()
+    cek_btn.text = "Cek Kuota"
+    detail_btn = MagicMock()
+    detail_btn.text = "Lihat Detail"
+
+    body_modem = MagicMock()
+    body_modem.text = """
+    Nama WiFi
+    tselhome-8BCB
+    Total Kuota: 85.29 GB / 85.29 GB
+    Lihat Detail
+    """
+
+    body_kuota = MagicMock()
+    body_kuota.text = """
+    FantaSIX 25GB
+    25.0 GB
+    / 25.0 GB
+    Berlaku s.d 10 Oct 2026
+    FantaSIX 25GB
+    25.0 GB
+    / 25.0 GB
+    Berlaku s.d 15 Oct 2026
+    Orbit 35GB
+    35.0 GB
+    / 35.0 GB
+    Berlaku s.d 20 Oct 2026
+    Orbit 0.15GB
+    0.15 GB
+    / 0.15 GB
+    Berlaku s.d 25 Oct 2026
+    Orbit 0.15GB
+    0.14 GB
+    / 0.15 GB
+    Berlaku s.d 28 Oct 2026
+    """
+
+    current_page = ["prabayar-info-modem"]
+    mock_driver.current_url = "https://www.myorbit.id/prabayar-info-modem"
+
+    def mock_find_element(by: str, value: str) -> Any:
+        if by == "tag name" and value == "body":
+            if current_page[0] == "prabayar-info-modem":
+                return body_modem
+            return body_kuota
+        if "Cek Kuota" in value:
+            return cek_btn
+        return MagicMock()
+
+    def mock_find_elements(by: str, value: str) -> list[Any]:
+        if by == "tag name" and value == "input":
+            return [phone_input, imei_input]
+        if by == "tag name" and value == "button":
+            return [lanjut_btn]
+        if "Cek Kuota" in value:
+            return [cek_btn]
+        if "Lihat Detail" in value or value == "//button | //a":
+            return [detail_btn]
+        return []
+
+    mock_driver.find_element.side_effect = mock_find_element
+    mock_driver.find_elements.side_effect = mock_find_elements
+
+    def mock_execute_script(script: str, *args: Any) -> Any:
+        if args and args[0] is detail_btn:
+            current_page[0] = "prabayar-info-kuota"
+            mock_driver.current_url = "https://www.myorbit.id/prabayar-info-kuota"
+        return None
+
+    mock_driver.execute_script.side_effect = mock_execute_script
+    mock_driver.page_source = """
+    <div>
+        <div class="wifi-label">Nama WiFi:</div>
+        <div class="wifi-name">tselhome-8BCB</div>
+        <div class="quota-header">Total Kuota: 85.29 GB / 85.29 GB</div>
+        <div class="card package-item">
+            <h4 class="title">FantaSIX 25GB</h4>
+            <div>25.0 GB / 25.0 GB</div>
+            <div>Berlaku s.d 10 Oct 2026</div>
+        </div>
+        <div class="card package-item">
+            <h4 class="title">FantaSIX 25GB</h4>
+            <div>25.0 GB / 25.0 GB</div>
+            <div>Berlaku s.d 15 Oct 2026</div>
+        </div>
+        <div class="card package-item">
+            <h4 class="title">Orbit 35GB</h4>
+            <div>35.0 GB / 35.0 GB</div>
+            <div>Berlaku s.d 20 Oct 2026</div>
+        </div>
+        <div class="card package-item">
+            <h4 class="title">Orbit 0.15GB</h4>
+            <div>0.15 GB / 0.15 GB</div>
+            <div>Berlaku s.d 25 Oct 2026</div>
+        </div>
+        <div class="card package-item">
+            <h4 class="title">Orbit 0.15GB</h4>
+            <div>0.14 GB / 0.15 GB</div>
+            <div>Berlaku s.d 28 Oct 2026</div>
+        </div>
+    </div>
+    """
+
+    status = scraper.scrape_modem(modem, driver=mock_driver, now=ref_now)
+    assert status.error is None
+    assert modem.ssid == "tselhome-8BCB"
+    assert status.total_remaining_gb == 85.29
+    assert status.total_quota_gb == 85.29
+    assert len(status.packages) == 5
+    assert status.earliest_expiry_str == "10 Oct 2026"
+    assert status.earliest_days_left == 9
 
 
 def test_orbit_cache_atomic_read_write(tmp_path: Path) -> None:
@@ -363,11 +731,16 @@ def test_api_orbit_sync_endpoint(client_with_db: TestClient) -> None:
     login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
     assert login_resp.status_code in (200, 302, 303)
 
-    resp = client_with_db.post("/api/orbit/sync", cookies=login_resp.cookies)
-    assert resp.status_code == 202
-    data = resp.json()
-    assert data["status"] == "accepted"
-    assert "sync triggered" in data["message"].lower()
+    with patch("mrtg_cmp.web.app._orbit_service") as mock_srv_getter:
+        mock_srv = MagicMock()
+        mock_srv_getter.return_value = mock_srv
+        resp = client_with_db.post("/api/orbit/sync", cookies=login_resp.cookies)
+        assert resp.status_code == 202
+        data = resp.json()
+        assert data["status"] == "accepted"
+        assert data["message"] == "Live Orbit sync started in background"
+        assert data["count"] == 12
+        mock_srv.sync_in_background.assert_called_once()
 
 
 def test_orbit_dashboard_html_view(client_with_db: TestClient) -> None:
@@ -402,6 +775,35 @@ def test_extract_modem_info_updates_target_ssid() -> None:
     info = extract_modem_info(html, target=target)
     assert info["wifi_name"] == "Orbit_Star_Live_SSID"
     assert target.ssid == "Orbit_Star_Live_SSID"
+
+
+def test_extract_modem_info_from_rendered_text(tmp_path: Path) -> None:
+    """Extracts SSID from rendered text with 'Nama WiFi\ntselhome-8BCB'."""
+    csv_file = tmp_path / "orbit_targets.csv"
+    csv_content = (
+        "no,imei,phone,location,ssid,status\n"
+        "1,860000000000001,6281367149931,Room 101,Old_SSID,ACTIVE\n"
+    )
+    csv_file.write_text(csv_content, encoding="utf-8")
+
+    target = OrbitModem(1, "860000000000001", "6281367149931", "Room 101", "Old_SSID")
+    rendered_text = """
+    Nama WiFi
+    tselhome-8BCB
+    6281367149931
+    Kuota Internet
+    Sisa 85.29GB / 85.29GB
+    Kuota Multimedia
+    Tidak ada kuota multimedia aktif
+    Lihat Detail
+    """
+    info = extract_modem_info(rendered_text, target=target, config_dir=tmp_path)
+    assert info["wifi_name"] == "tselhome-8BCB"
+    assert target.ssid == "tselhome-8BCB"
+
+    # Verify disk persistence
+    modems = load_orbit_catalog_csv(csv_file)
+    assert modems[0].ssid == "tselhome-8BCB"
 
 
 def test_update_catalog_modem_ssid_csv(tmp_path: Path) -> None:
@@ -495,3 +897,186 @@ def test_update_catalog_modem_ssid_empty_and_missing() -> None:
     assert update_catalog_modem_ssid("", "SSID") is False
     missing_dir = Path("non_existent_dir_12345")
     assert update_catalog_modem_ssid("0812345", "SSID", config_dir=missing_dir) is False
+
+
+def test_build_orbit_driver() -> None:
+    """build_orbit_driver configures headless Chrome options."""
+    with patch("selenium.webdriver.Chrome") as mock_chrome:
+        mock_driver = MagicMock()
+        mock_chrome.return_value = mock_driver
+        driver = build_orbit_driver(headless=True)
+        assert driver is mock_driver
+        mock_chrome.assert_called_once()
+        options = mock_chrome.call_args[1]["options"]
+        assert "--headless=new" in options.arguments
+        assert "--no-sandbox" in options.arguments
+        assert "--disable-dev-shm-usage" in options.arguments
+
+
+def test_orbit_service_sync_all(tmp_path: Path) -> None:
+    """OrbitService.sync_all processes all modems and persists status to cache."""
+    cache_file = tmp_path / "modems.json"
+    cache = OrbitCache(cache_file)
+
+    catalog = [
+        OrbitModem(1, "1700000001", "081200000001", "Room 1", "SSID-1"),  # Invalid IMEI
+        OrbitModem(2, "860000000000002", "081200000002", "Room 2", "SSID-2"),  # Valid
+        OrbitModem(3, "860000000000003", "081200000003", "Ex Site", "SSID-3", status="EX_CUSTOMER"),
+    ]
+
+    mock_driver = MagicMock()
+    phone_input = MagicMock()
+    imei_input = MagicMock()
+    lanjut_btn = MagicMock()
+    lanjut_btn.text = "Lanjutkan"
+    cek_btn = MagicMock()
+    cek_btn.text = "Cek Kuota"
+    detail_btn = MagicMock()
+    detail_btn.text = "Lihat Detail"
+
+    body_modem = MagicMock()
+    body_modem.text = """
+    Nama WiFi
+    tselhome-8BCB
+    Total Kuota: 50.0 GB / 50.0 GB
+    Lihat Detail
+    """
+
+    body_kuota = MagicMock()
+    body_kuota.text = """
+    Internet Orbit 50GB
+    50.0GB
+    / 50.0GB
+    Berlaku s.d 08 Oct 2026
+    """
+
+    current_page = ["prabayar-info-modem"]
+    mock_driver.current_url = "https://www.myorbit.id/prabayar-info-modem"
+
+    def mock_find_element(by: str, value: str) -> Any:
+        if by == "tag name" and value == "body":
+            if current_page[0] == "prabayar-info-modem":
+                return body_modem
+            return body_kuota
+        if "Cek Kuota" in value:
+            return cek_btn
+        return MagicMock()
+
+    def mock_find_elements(by: str, value: str) -> list[Any]:
+        if by == "tag name" and value == "input":
+            return [phone_input, imei_input]
+        if by == "tag name" and value == "button":
+            return [lanjut_btn]
+        if "Cek Kuota" in value:
+            return [cek_btn]
+        if "Lihat Detail" in value or value == "//button | //a":
+            return [detail_btn]
+        return []
+
+    mock_driver.find_element.side_effect = mock_find_element
+    mock_driver.find_elements.side_effect = mock_find_elements
+
+    def mock_execute_script(script: str, *args: Any) -> Any:
+        if args and args[0] is detail_btn:
+            current_page[0] = "prabayar-info-kuota"
+            mock_driver.current_url = "https://www.myorbit.id/prabayar-info-kuota"
+        return None
+
+    mock_driver.execute_script.side_effect = mock_execute_script
+    mock_driver.page_source = """
+    <div>
+        <div class="wifi-name">tselhome-8BCB</div>
+        <div>50.0 GB / 50.0 GB</div>
+    </div>
+    """
+
+    service = OrbitService()
+    statuses = service.sync_all(catalog, cache=cache, driver=mock_driver)
+
+    assert len(statuses) == 3
+    assert statuses[0].error == "IMEI_PENDING"
+    assert statuses[1].error is None
+    assert statuses[1].total_remaining_gb == 50.0
+    assert statuses[1].target.ssid == "tselhome-8BCB"
+    assert statuses[2].error == "EX_CUSTOMER"
+
+    # Verify cache on disk
+    assert cache.is_cached()
+    loaded = cache.load()
+    assert loaded is not None
+    assert len(loaded) == 3
+    assert loaded[1].total_remaining_gb == 50.0
+
+
+def test_orbit_service_sync_in_background_concurrency() -> None:
+    """Duplicate sync triggers are rejected while a sync is in progress."""
+    service = OrbitService()
+    catalog = [OrbitModem(1, "1700000001", "081200000001", "Room 1", "SSID-1")]
+
+    # Manually acquire the sync flag
+    service._is_syncing = True
+    assert service.is_syncing is True
+
+    # Duplicate background attempt should be skipped
+    res = service.sync_in_background(catalog)
+    assert res is False
+
+    # Release lock
+    service._is_syncing = False
+    assert service.is_syncing is False
+
+    # Now it succeeds and triggers a worker thread
+    res2 = service.sync_in_background(catalog)
+    assert res2 is True
+
+
+def test_cli_orbit_sync(capsys: Any, tmp_path: Path) -> None:
+    """mrtg-cmp orbit-sync CLI command executes and prints modem status rows."""
+    catalog_file = tmp_path / "orbit_targets.csv"
+    catalog_file.write_text(
+        "no,imei,phone,location,ssid,status\n"
+        "1,1700000001,081200000001,Room 1,SSID-1,ACTIVE\n"
+        "2,860000000000002,081200000002,Room 2,SSID-2,ACTIVE\n",
+        encoding="utf-8",
+    )
+    cache_file = tmp_path / "modems.json"
+
+    with patch.object(OrbitService, "sync_all") as mock_sync_all:
+        mock_sync_all.return_value = [
+            OrbitModemStatus(
+                target=OrbitModem(1, "1700000001", "081200000001", "Room 1", "SSID-1"),
+                total_remaining_gb=0.0,
+                total_quota_gb=0.0,
+                multimedia_active=False,
+                packages=[],
+                earliest_expiry_str=None,
+                earliest_days_left=None,
+                last_scraped_at="2026-10-01 10:00:00",
+                error="IMEI_PENDING",
+            ),
+            OrbitModemStatus(
+                target=OrbitModem(2, "860000000000002", "081200000002", "Room 2", "tselhome-8BCB"),
+                total_remaining_gb=85.29,
+                total_quota_gb=85.29,
+                multimedia_active=False,
+                packages=[],
+                earliest_expiry_str="10 Oct 2026",
+                earliest_days_left=9,
+                last_scraped_at="2026-10-01 10:00:00",
+                error=None,
+            ),
+        ]
+
+        exit_code = main([
+            "orbit-sync",
+            "--catalog",
+            str(catalog_file),
+            "--cache-file",
+            str(cache_file),
+        ])
+        assert exit_code == 0
+
+        captured = capsys.readouterr()
+        assert "[IMEI_PENDING] 081200000001 (SSID-1): IMEI_PENDING" in captured.out
+        assert "[OK] 081200000002 (tselhome-8BCB): 85.29 GB / 85.29 GB" in captured.out
+

@@ -160,6 +160,36 @@ def cmd_all(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_orbit_sync(args: argparse.Namespace) -> int:
+    """Synchronize Telkomsel Orbit modem quotas with MyOrbit portal."""
+    from .orbit.cache import OrbitCache
+    from .orbit.service import OrbitService
+    from .orbit.targets import resolve_orbit_catalog
+
+    catalog_path = getattr(args, "catalog", None) or settings.orbit_catalog_file
+    cache_path = getattr(args, "cache_file", None) or (settings.orbit_cache_dir / "modems.json")
+
+    catalog = resolve_orbit_catalog(catalog_path)
+    cache = OrbitCache(cache_path)
+    logger.info("Starting Orbit modem sync for %d modems...", len(catalog))
+
+    service = OrbitService(headless=not getattr(args, "no_headless", False))
+    statuses = service.sync_all(catalog, cache)
+
+    for st in statuses:
+        m = st.target
+        ssid_display = f" ({m.ssid})" if m.ssid else ""
+        if st.error:
+            print(f"[{st.error}] {m.phone or m.imei}{ssid_display}: {st.error}")
+        else:
+            rem_str = f"{st.total_remaining_gb:.2f} GB"
+            tot_str = f"{st.total_quota_gb:.2f} GB"
+            print(f"[OK] {m.phone or m.imei}{ssid_display}: {rem_str} / {tot_str}")
+
+    logger.info("Orbit sync completed for %d modems.", len(statuses))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build and return command-line argument parser."""
     parser = argparse.ArgumentParser(
@@ -218,6 +248,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Also run the TelkomCare Netcare scraper daemon in a background thread",
     )
     p_all.set_defaults(func=cmd_all)
+
+    # orbit-sync
+    p_orbit = subparsers.add_parser(
+        "orbit-sync", help="Synchronize Telkomsel Orbit modem quotas with MyOrbit portal"
+    )
+    p_orbit.add_argument("--catalog", "-c", help="Path to Orbit catalog file (CSV or XLSX)")
+    p_orbit.add_argument("--cache-file", help="Path to Orbit JSON cache file")
+    p_orbit.add_argument(
+        "--no-headless", action="store_true", help="Launch visible browser window"
+    )
+    p_orbit.set_defaults(func=cmd_orbit_sync)
 
     return parser
 

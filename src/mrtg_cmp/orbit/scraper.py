@@ -141,19 +141,54 @@ class OrbitModemStatus:
 def parse_quota_string(text: str) -> tuple[float, float]:
     """Parse quota string like '28.56GB / 30GB' or '500MB / 10GB'.
 
+    Prioritizes 'Sisa ... / ...' pattern to avoid false matches on stray fractions.
     Returns (remaining_gb, total_gb).
     """
     if not text:
         return 0.0, 0.0
 
-    # Pattern: remaining [unit] / total [unit]
-    pattern = r"([\d.,]+)\s*(GB|MB|KB)?\s*/\s*([\d.,]+)\s*(GB|MB|KB)?"
+    def _convert_units(
+        rem_str: str, rem_u: str | None, tot_str: str, tot_u: str | None
+    ) -> tuple[float, float]:
+        try:
+            rem_val = float(rem_str.replace(",", "."))
+            tot_val = float(tot_str.replace(",", "."))
+        except ValueError:
+            return 0.0, 0.0
+        r_unit = (rem_u or tot_u or "GB").upper()
+        t_unit = (tot_u or rem_u or "GB").upper()
+
+        if r_unit == "MB":
+            rem_val /= 1024.0
+        elif r_unit == "KB":
+            rem_val /= (1024.0 * 1024.0)
+
+        if t_unit == "MB":
+            tot_val /= 1024.0
+        elif t_unit == "KB":
+            tot_val /= (1024.0 * 1024.0)
+
+        return round(rem_val, 2), round(tot_val, 2)
+
+    # 1. Priority pattern with 'Sisa' (avoids stray fractions like '8.0 / 8.0')
+    pattern_sisa = r"Sisa\s*(\d+(?:[.,]\d+)?)\s*(GB|MB|KB)?\s*/\s*(\d+(?:[.,]\d+)?)\s*(GB|MB|KB)?"
+    m_sisa = re.search(pattern_sisa, text, re.IGNORECASE)
+    if m_sisa:
+        return _convert_units(
+            m_sisa.group(1), m_sisa.group(2), m_sisa.group(3), m_sisa.group(4)
+        )
+
+    # 2. Fallback to general: remaining [unit] / total [unit]
+    pattern = r"(\d+(?:[.,]\d+)?)\s*(GB|MB|KB)?\s*/\s*(\d+(?:[.,]\d+)?)\s*(GB|MB|KB)?"
     m = re.search(pattern, text, re.IGNORECASE)
     if not m:
-        # Try single remaining pattern
-        single = re.search(r"([\d.,]+)\s*(GB|MB|KB)?", text, re.IGNORECASE)
+        # 3. Fallback to single remaining pattern
+        single = re.search(r"(\d+(?:[.,]\d+)?)\s*(GB|MB|KB)?", text, re.IGNORECASE)
         if single:
-            val = float(single.group(1).replace(",", "."))
+            try:
+                val = float(single.group(1).replace(",", "."))
+            except ValueError:
+                return 0.0, 0.0
             unit = (single.group(2) or "GB").upper()
             if unit == "MB":
                 val /= 1024.0
@@ -162,22 +197,7 @@ def parse_quota_string(text: str) -> tuple[float, float]:
             return round(val, 2), round(val, 2)
         return 0.0, 0.0
 
-    rem_val = float(m.group(1).replace(",", "."))
-    rem_unit = (m.group(2) or m.group(4) or "GB").upper()
-    tot_val = float(m.group(3).replace(",", "."))
-    tot_unit = (m.group(4) or "GB").upper()
-
-    if rem_unit == "MB":
-        rem_val /= 1024.0
-    elif rem_unit == "KB":
-        rem_val /= (1024.0 * 1024.0)
-
-    if tot_unit == "MB":
-        tot_val /= 1024.0
-    elif tot_unit == "KB":
-        tot_val /= (1024.0 * 1024.0)
-
-    return round(rem_val, 2), round(tot_val, 2)
+    return _convert_units(m.group(1), m.group(2), m.group(3), m.group(4))
 
 
 def parse_expiry_date(
@@ -243,7 +263,7 @@ def parse_expiry_date(
 
 
 def parse_package_cards_html(html: str, now: datetime | None = None) -> list[OrbitPackage]:
-    """Parse package breakdown cards from HTML markup.
+    """Parse package breakdown cards from text or HTML markup.
 
     Matches cards containing package name, quota info, and expiry date.
     """
@@ -251,7 +271,59 @@ def parse_package_cards_html(html: str, now: datetime | None = None) -> list[Orb
     if not html:
         return packages
 
-    # Regex pattern to match package blocks or rows on MyOrbit
+    clean_text = html.replace("\r\n", "\n").replace("\r", "\n")
+
+    # 1. Text-based parsing support for structure seen on prabayar-info-kuota:
+    # Kuota FantaSIX
+    # 25GB
+    # / 25GB
+    # Berlaku s.d 13 Oct 2026
+    text_pattern = re.compile(
+        r"([A-Za-z0-9 \-_]+)\n+\s*"
+        r"(\d+(?:[.,]\d+)?)\s*(GB|MB|KB)?\s*\n+\s*"
+        r"/\s*(\d+(?:[.,]\d+)?)\s*(GB|MB|KB)?\s*\n+\s*"
+        r"Berlaku\s+s[\./]?d[\.:]?\s*([^\n]+)",
+        re.IGNORECASE,
+    )
+    for m in text_pattern.finditer(clean_text):
+        name = m.group(1).strip()
+        rem_str = m.group(2)
+        rem_unit = (m.group(3) or m.group(5) or "GB").upper()
+        tot_str = m.group(4)
+        tot_unit = (m.group(5) or m.group(3) or "GB").upper()
+        exp_raw = m.group(6).strip()
+
+        try:
+            rem_val = float(rem_str.replace(",", "."))
+            tot_val = float(tot_str.replace(",", "."))
+        except ValueError:
+            continue
+
+        if rem_unit == "MB":
+            rem_val /= 1024.0
+        elif rem_unit == "KB":
+            rem_val /= (1024.0 * 1024.0)
+
+        if tot_unit == "MB":
+            tot_val /= 1024.0
+        elif tot_unit == "KB":
+            tot_val /= (1024.0 * 1024.0)
+
+        exp_str, days_left = parse_expiry_date(exp_raw, now=now)
+        packages.append(
+            OrbitPackage(
+                name=name,
+                remaining_gb=round(rem_val, 2),
+                total_gb=round(tot_val, 2),
+                expiry_str=exp_str,
+                days_left=days_left,
+            )
+        )
+
+    if packages:
+        return packages
+
+    # 2. HTML fallback: Regex pattern to match package blocks or rows on MyOrbit
     card_pattern = re.compile(
         r"(?:<div[^>]*class=[\"'][^\"']*(?:card|package|item)[^\"']*[\"'][^>]*>)(.*?)"
         r"(?=</div>\s*<div[^>]*class=[\"'][^\"']*(?:card|package|item)[^\"']*[\"']|</div>\s*</div>|$)",
@@ -266,10 +338,12 @@ def parse_package_cards_html(html: str, now: datetime | None = None) -> list[Orb
     known_packages = (
         "Internet Orbit",
         "Kuota FantaSIX",
+        "FantaSIX",
         "Kuota Sahur",
         "Multimedia Orbit",
         "Orbit Booster",
         "Paket Ekstra",
+        "Orbit",
     )
 
     for block in matches:
@@ -329,52 +403,62 @@ def extract_modem_info(
     corrected in the cached status manifest and catalog files on disk.
     """
     if hasattr(html_or_driver, "page_source"):
-        html = str(html_or_driver.page_source or "")
+        raw = str(html_or_driver.page_source or "")
     else:
-        html = str(html_or_driver or "")
+        raw = str(html_or_driver or "")
 
     info: dict[str, Any] = {}
-    if not html:
+    if not raw:
         return info
 
     wifi_name = ""
-    # Pattern 1: HTML tags following Nama WiFi or SSID label
-    m = re.search(
-        r"(?:Nama\s+Wi[-]?Fi|WiFi\s+Name|SSID)\s*[:]?\s*<(?:[a-zA-Z0-9]+)[^>]*>(.*?)</(?:[a-zA-Z0-9]+)>",
-        html,
-        re.IGNORECASE | re.DOTALL,
-    )
-    if m:
-        wifi_name = re.sub(r"<[^>]+>", "", m.group(1)).strip()
-    else:
-        # Pattern 2: Plain text after label
-        m2 = re.search(
-            r"(?:Nama\s+Wi[-]?Fi|WiFi\s+Name|SSID)\s*[:]\s*([^\n<]+)",
-            html,
-            re.IGNORECASE,
-        )
-        if m2:
+
+    # Pattern 1: Label followed by newline or colon (e.g. 'Nama WiFi\ntselhome-8BCB')
+    m1 = re.search(r"Nama\s+Wi[-]?Fi\s*[\n:]\s*([^\n<]+)", raw, re.IGNORECASE)
+    if m1 and m1.group(1).strip():
+        candidate = m1.group(1).strip()
+        cleaned_candidate = re.sub(r"<[^>]+>", "", candidate).strip()
+        if cleaned_candidate:
+            wifi_name = cleaned_candidate
+
+    # Pattern 2: Carrier SSID pattern (e.g. tselhome-8BCB)
+    if not wifi_name:
+        m2 = re.search(r"\b(tselhome-[A-Za-z0-9_-]+)\b", raw, re.IGNORECASE)
+        if m2 and m2.group(1).strip():
             wifi_name = m2.group(1).strip()
-        else:
-            # Pattern 3: class/id matching wifi-name or ssid
-            m3 = re.search(
-                r"<(?:[a-zA-Z0-9]+)[^>]*class=[\"'][^\"']*(?:wifi-name|modem-ssid|ssid)[^\"']*[\"'][^>]*>(.*?)</(?:[a-zA-Z0-9]+)>",
-                html,
-                re.IGNORECASE | re.DOTALL,
-            )
-            if m3:
-                wifi_name = re.sub(r"<[^>]+>", "", m3.group(1)).strip()
+
+    # Pattern 3: HTML tags following Nama WiFi or SSID label
+    if not wifi_name:
+        m3 = re.search(
+            r"(?:Nama\s+Wi[-]?Fi|WiFi\s+Name|SSID)\s*[:]?\s*<(?:[a-zA-Z0-9]+)[^>]*>(.*?)</(?:[a-zA-Z0-9]+)>",
+            raw,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if m3:
+            cleaned = re.sub(r"<[^>]+>", "", m3.group(1)).strip()
+            if cleaned:
+                wifi_name = cleaned
+
+    # Pattern 4: class/id matching wifi-name or ssid
+    if not wifi_name:
+        m4 = re.search(
+            r"<(?:[a-zA-Z0-9]+)[^>]*class=[\"'][^\"']*(?:wifi-name|modem-ssid|ssid)[^\"']*[\"'][^>]*>(.*?)</(?:[a-zA-Z0-9]+)>",
+            raw,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if m4:
+            cleaned = re.sub(r"<[^>]+>", "", m4.group(1)).strip()
+            if cleaned:
+                wifi_name = cleaned
 
     if wifi_name:
+        wifi_name = wifi_name.strip()
         info["wifi_name"] = wifi_name
         if target is not None:
-            if target.ssid != wifi_name:
-                target.ssid = wifi_name
-                phone_or_imei = target.phone or target.imei
-                if phone_or_imei:
-                    update_catalog_modem_ssid(phone_or_imei, wifi_name, config_dir=config_dir)
-            else:
-                target.ssid = wifi_name
+            target.ssid = wifi_name
+            phone_or_imei = target.phone or target.imei
+            if phone_or_imei:
+                update_catalog_modem_ssid(phone_or_imei, wifi_name, config_dir=config_dir)
 
     return info
 
@@ -475,59 +559,70 @@ class OrbitScraper:
             wait = WebDriverWait(driver, self.timeout_seconds)
 
             # Step 2: Fill Phone and IMEI
-            phone_input = wait.until(
-                ec.presence_of_element_located((
-                    By.CSS_SELECTOR,
-                    "input[name='phone'], input[name='msisdn'], #nomor_modem",
-                ))
-            )
+            wait.until(ec.presence_of_element_located((By.TAG_NAME, "input")))
+            inputs = driver.find_elements(By.TAG_NAME, "input")
+            if len(inputs) < 2:
+                raise LookupError(f"Expected at least 2 input fields, found {len(inputs)}")
+            phone_input = inputs[0]
+            imei_input = inputs[1]
             phone_input.clear()
             phone_input.send_keys(target.phone)
-
-            imei_input = driver.find_element(By.CSS_SELECTOR, "input[name='imei'], #nomor_imei")
             imei_input.clear()
             imei_input.send_keys(target.imei)
 
-            submit_btn = driver.find_element(
-                By.XPATH, "//button[contains(normalize-space(), 'Lanjutkan') or @type='submit']"
-            )
-            submit_btn.click()
+            # Click "Lanjutkan" via JS to bypass cookie banner intercepts
+            btns = driver.find_elements(By.TAG_NAME, "button")
+            for b in btns:
+                if "Lanjutkan" in getattr(b, "text", ""):
+                    driver.execute_script("arguments[0].click();", b)
+                    break
 
-            # Step 3: Wait for registration/verification landing
-            cek_kuota_xpath = (
-                "//button[contains(normalize-space(), 'Cek Kuota')] | "
-                "//a[contains(normalize-space(), 'Cek Kuota')]"
+            # Step 3: Wait for landing & click "Cek Kuota" via JS
+            cek_btn = wait.until(
+                ec.presence_of_element_located((By.XPATH, "//*[contains(text(), 'Cek Kuota')]"))
             )
-            wait.until(ec.presence_of_element_located((By.XPATH, cek_kuota_xpath)))
-            cek_kuota_btn = driver.find_element(By.XPATH, cek_kuota_xpath)
-            cek_kuota_btn.click()
+            driver.execute_script("arguments[0].click();", cek_btn)
 
-            # Step 4: Extract Total Quota from prabayar-info-modem
+            # Step 4: Wait for URL and AJAX quota data to render
+            wait.until(lambda d: "prabayar" in d.current_url)
             wait.until(
-                ec.presence_of_element_located(
-                    (By.XPATH, "//*[contains(text(), 'GB') or contains(text(), 'MB')]")
-                )
+                lambda d: "GB" in getattr(d.find_element(By.TAG_NAME, "body"), "text", "")
+                or "MB" in getattr(d.find_element(By.TAG_NAME, "body"), "text", "")
             )
-            page_text = driver.page_source
-            extract_modem_info(page_text, target=target)
-            total_rem, total_quota = parse_quota_string(page_text)
-            multimedia = "multimedia" in page_text.lower()
+
+            body_text = driver.find_element(By.TAG_NAME, "body").text
+            page_source = driver.page_source or ""
+            combined_modem = f"{body_text}\n{page_source}" if body_text else page_source
+
+            extract_modem_info(body_text + "\n" + (driver.page_source or ""), target=target)
+            total_rem, total_quota = parse_quota_string(body_text)
+            if total_quota == 0.0 and page_source:
+                total_rem, total_quota = parse_quota_string(page_source)
+
+            multimedia = "multimedia" in combined_modem.lower()
 
             # Step 5: Click "Lihat Detail" to get multi-package breakdown
-            detail_xpath = (
-                "//button[contains(normalize-space(), 'Lihat Detail')] | "
-                "//a[contains(normalize-space(), 'Lihat Detail')]"
-            )
-            detail_buttons = driver.find_elements(By.XPATH, detail_xpath)
+            detail_btns = [
+                b
+                for b in driver.find_elements(By.XPATH, "//button | //a")
+                if "Lihat Detail" in getattr(b, "text", "")
+            ]
+
             packages: list[OrbitPackage] = []
-            if detail_buttons:
-                detail_buttons[0].click()
+            if detail_btns:
+                driver.execute_script("arguments[0].click();", detail_btns[0])
+                wait.until(lambda d: "prabayar-info-kuota" in d.current_url)
                 wait.until(
-                    ec.presence_of_element_located(
-                        (By.XPATH, "//*[contains(text(), 'Berlaku') or contains(text(), 's.d')]")
-                    )
+                    lambda d: "Berlaku"
+                    in getattr(d.find_element(By.TAG_NAME, "body"), "text", "")
                 )
-                packages = parse_package_cards_html(driver.page_source, now=now_dt)
+                kuota_body = driver.find_element(By.TAG_NAME, "body").text
+                packages = parse_package_cards_html(
+                    kuota_body + "\n" + (driver.page_source or ""), now=now_dt
+                )
+
+            if not packages and page_source:
+                packages = parse_package_cards_html(page_source, now=now_dt)
 
             if not packages and total_quota > 0:
                 # Default single package if detailed breakdown was unavailable
