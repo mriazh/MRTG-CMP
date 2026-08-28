@@ -45,6 +45,39 @@
     align-items: center;
 }
 
+.status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+}
+.status-dot.up { background-color: var(--success); }
+
+.btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.45rem 0.85rem;
+    font-size: 0.8rem;
+    font-weight: 500;
+    background: var(--bg-card);
+    color: var(--text-main);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+.btn-secondary:hover {
+    background: var(--bg-hover, var(--border));
+}
+
 .btn-sync {
     display: inline-flex;
     align-items: center;
@@ -566,10 +599,15 @@
     <div class="orbit-header-bar">
         <div class="orbit-title-group">
             <h2>📡 Telkomsel Orbit Modem Monitoring</h2>
-            <p class="orbit-subtitle">Monitoring kuota multi-package, masa berlaku paket, dan inventaris modem Orbit</p>
+            <p class="orbit-subtitle">Multi-package quota monitoring, package validity, and Orbit modem inventory</p>
         </div>
         <div class="orbit-actions">
-            <button id="btn-sync-orbit" class="btn-sync" type="button" title="Sinkronisasi data kuota Orbit sekarang">
+            <span class="status-badge">
+                <span class="status-dot up"></span>
+                Live poll: 180s &middot; Auto-refresh: <span id="orbit-countdown-timer">180</span>s
+            </span>
+            <button type="button" id="btn-orbit-refresh-all" class="btn-secondary">Refresh All</button>
+            <button id="btn-sync-orbit" class="btn-sync" type="button" title="Sync Orbit modem data now">
                 <span id="sync-icon">🔄</span>
                 <span id="sync-text">Sync Orbit Now</span>
             </button>
@@ -579,50 +617,50 @@
     <!-- Summary KPI Counters -->
     <div class="orbit-kpi-grid">
         <div class="orbit-kpi-card">
-            <div class="orbit-kpi-label">Total Modem</div>
-            <div class="orbit-kpi-value">{{ summary.total_modems }}</div>
-            <div class="orbit-kpi-subtext">Inventaris terdaftar</div>
+            <div class="orbit-kpi-label">Total Modems</div>
+            <div class="orbit-kpi-value" id="kpi-total-modems">{{ summary.total_modems }}</div>
+            <div class="orbit-kpi-subtext">Registered inventory</div>
         </div>
         <div class="orbit-kpi-card">
-            <div class="orbit-kpi-label">Aktif di Ruangan</div>
-            <div class="orbit-kpi-value">{{ summary.active_modems }}</div>
-            <div class="orbit-kpi-subtext">Modem beroperasi</div>
+            <div class="orbit-kpi-label">Active in Room</div>
+            <div class="orbit-kpi-value" id="kpi-active-modems">{{ summary.active_modems }}</div>
+            <div class="orbit-kpi-subtext">Operating modems</div>
         </div>
         <div class="orbit-kpi-card">
-            <div class="orbit-kpi-label">Total Sisa Kuota</div>
-            <div class="orbit-kpi-value">{{ summary.total_remaining_gb }} GB</div>
-            <div class="orbit-kpi-subtext">Dari total {{ summary.total_quota_gb }} GB</div>
+            <div class="orbit-kpi-label">Total Remaining Quota</div>
+            <div class="orbit-kpi-value" id="kpi-remaining-quota">{{ summary.total_remaining_gb }} GB</div>
+            <div class="orbit-kpi-subtext" id="kpi-quota-subtext">Out of {{ summary.total_quota_gb }} GB total</div>
         </div>
         <div class="orbit-kpi-card">
-            <div class="orbit-kpi-label">Expired Segera</div>
-            <div class="orbit-kpi-value" style="color: {% if summary.expiring_soon_count > 0 %}#F59E0B{% else %}var(--primary){% endif %};">
+            <div class="orbit-kpi-label">Expiring Soon</div>
+            <div class="orbit-kpi-value" id="kpi-expiring-soon" style="color: {% if summary.expiring_soon_count > 0 %}#F59E0B{% else %}var(--primary){% endif %};">
                 {{ summary.expiring_soon_count }}
             </div>
-            <div class="orbit-kpi-subtext">&le; 7 hari ke depan</div>
+            <div class="orbit-kpi-subtext">&le; 7 days ahead</div>
         </div>
         <div class="orbit-kpi-card">
             <div class="orbit-kpi-label">IMEI Pending</div>
-            <div class="orbit-kpi-value" style="color: {% if summary.imei_pending_count > 0 %}#DC2626{% else %}var(--primary){% endif %};">
+            <div class="orbit-kpi-value" id="kpi-imei-pending" style="color: {% if summary.imei_pending_count > 0 %}#DC2626{% else %}var(--primary){% endif %};">
                 {{ summary.imei_pending_count }}
             </div>
-            <div class="orbit-kpi-subtext">ID 10-digit butuh 15-digit IMEI</div>
+            <div class="orbit-kpi-subtext">10-digit ID requires 15-digit IMEI</div>
         </div>
     </div>
 
     <!-- Filter Pills -->
     <div class="orbit-filter-bar">
         <span class="orbit-filter-label">Filter:</span>
-        <button class="orbit-pill active" data-filter="all" type="button">
-            Semua Modem ({{ stats.all }})
+        <button class="orbit-pill active" id="pill-filter-all" data-filter="all" type="button">
+            All Modems ({{ stats.all }})
         </button>
-        <button class="orbit-pill" data-filter="active" type="button">
-            Aktif di Ruangan ({{ stats.active }})
+        <button class="orbit-pill" id="pill-filter-active" data-filter="active" type="button">
+            Active in Room ({{ stats.active }})
         </button>
-        <button class="orbit-pill" data-filter="idle" type="button">
-            Cadangan / IDLE ({{ stats.idle }})
+        <button class="orbit-pill" id="pill-filter-idle" data-filter="idle" type="button">
+            Idle / Spare ({{ stats.idle }})
         </button>
-        <button class="orbit-pill" data-filter="ex_customer" type="button">
-            Bekas ({{ stats.ex_customer }})
+        <button class="orbit-pill" id="pill-filter-ex" data-filter="ex_customer" type="button">
+            Decommissioned ({{ stats.ex_customer }})
         </button>
     </div>
 
@@ -640,13 +678,13 @@
                 </div>
                 <div>
                     {% if not m.target.imei_valid %}
-                        <span class="orbit-status-pill imei-pending" title="ID 10-digit membutuhkan 15 digit IMEI">⚠️ IMEI Pending</span>
+                        <span class="orbit-status-pill imei-pending" title="10-digit ID requires 15-digit IMEI">⚠️ IMEI Pending</span>
                     {% elif m.target.status == 'ACTIVE' %}
                         <span class="orbit-status-pill active">🟢 Active</span>
                     {% elif m.target.status == 'IDLE' %}
                         <span class="orbit-status-pill idle">⚪ IDLE</span>
                     {% elif m.target.status == 'EX_CUSTOMER' %}
-                        <span class="orbit-status-pill ex-customer">🔴 Bekas</span>
+                        <span class="orbit-status-pill ex-customer">🔴 Decommissioned</span>
                     {% endif %}
                 </div>
             </div>
@@ -654,11 +692,11 @@
             <div class="orbit-card-body">
                 <div class="orbit-specs-list">
                     <div class="orbit-spec-item">
-                        <span class="orbit-spec-label">No. Telepon</span>
+                        <span class="orbit-spec-label">Phone Number</span>
                         <span class="orbit-spec-val">{{ m.target.phone }}</span>
                     </div>
                     <div class="orbit-spec-item">
-                        <span class="orbit-spec-label">SSID Modem</span>
+                        <span class="orbit-spec-label">Modem SSID</span>
                         <span class="orbit-spec-val">{{ m.target.ssid }}</span>
                     </div>
                     <div class="orbit-spec-item" style="grid-column: span 2;">
@@ -675,9 +713,9 @@
                 <!-- Quota Box -->
                 <div class="orbit-quota-box">
                     <div class="orbit-quota-header">
-                        <span class="orbit-quota-title">Sisa Kuota Internet</span>
+                        <span class="orbit-quota-title">Remaining Internet Quota</span>
                         <span class="orbit-quota-pct" style="color: {% if pct >= 30 %}#10B981{% elif pct >= 10 %}#F59E0B{% else %}#EF4444{% endif %};">
-                            {% if m.target.imei_valid and tot > 0 %}{{ pct }}% Tersisa{% elif not m.target.imei_valid %}-{% else %}0%{% endif %}
+                            {% if m.target.imei_valid and tot > 0 %}{{ pct }}% remaining{% elif not m.target.imei_valid %}-{% else %}0%{% endif %}
                         </span>
                     </div>
                     <div class="orbit-progress-track">
@@ -688,7 +726,7 @@
                             {% if m.target.imei_valid and tot > 0 %}
                                 <strong>{{ rem }} GB</strong> / {{ tot }} GB
                             {% elif not m.target.imei_valid %}
-                                <em style="color: var(--text-muted);">Menunggu input IMEI</em>
+                                <em style="color: var(--text-muted);">Awaiting IMEI input</em>
                             {% else %}
                                 <strong>0.0 GB</strong> / 0.0 GB
                             {% endif %}
@@ -700,24 +738,24 @@
                 <div>
                     {% if not m.target.imei_valid %}
                         <span class="orbit-expiry-badge pending">
-                            ⚠️ IMEI Pending (15 digit dibutuhkan)
+                            ⚠️ IMEI Pending (15 digits required)
                         </span>
                     {% elif m.target.status == 'EX_CUSTOMER' %}
                         <span class="orbit-expiry-badge inactive">
-                            🔴 Unit Bekas / Non-Aktif
+                            🔴 Decommissioned / Inactive
                         </span>
                     {% elif m.earliest_expiry_str and m.earliest_days_left is not none %}
                         {% set days = m.earliest_days_left %}
                         <span class="orbit-expiry-badge {% if days > 14 %}safe{% elif days > 3 %}soon{% else %}critical{% endif %}">
-                            ⏳ Expired terdekat: {{ m.earliest_expiry_str }} ({{ days }} hari lagi)
+                            ⏳ Earliest expiry: {{ m.earliest_expiry_str }} ({{ days }} days remaining)
                         </span>
                     {% elif m.earliest_expiry_str %}
                         <span class="orbit-expiry-badge safe">
-                            ⏳ Expired: {{ m.earliest_expiry_str }}
+                            ⏳ Earliest expiry: {{ m.earliest_expiry_str }}
                         </span>
                     {% else %}
                         <span class="orbit-expiry-badge inactive">
-                            ⏳ Masa aktif tidak tersedia
+                            ⏳ Expiry not available
                         </span>
                     {% endif %}
                 </div>
@@ -731,7 +769,7 @@
                     data-ssid="{{ m.target.ssid }}"
                     data-packages='{{ m.packages_json | e }}'
                     {% if not m.target.imei_valid or not m.packages %}disabled{% endif %}>
-                    📦 Lihat Rincian Paket ({{ m.packages | length }})
+                    📦 View Package Details ({{ m.packages | length }})
                 </button>
             </div>
         </div>
@@ -745,18 +783,18 @@
         <div class="orbit-modal-header">
             <div class="orbit-modal-title">
                 <span>📦</span>
-                <span id="modal-title-text">Rincian Paket Orbit</span>
+                <span id="modal-title-text">Package Quota Details</span>
             </div>
-            <button class="orbit-modal-close" id="btn-close-modal" type="button" aria-label="Tutup">&times;</button>
+            <button class="orbit-modal-close" id="btn-close-modal" type="button" aria-label="Close">&times;</button>
         </div>
         <div class="orbit-modal-body">
             <div class="orbit-modal-summary">
-                <div>Lokasi: <strong id="modal-room">-</strong></div>
-                <div>No. Telepon: <strong id="modal-phone">-</strong></div>
-                <div>SSID: <strong id="modal-ssid">-</strong></div>
-                <div>Total Paket: <strong id="modal-pkg-count">0</strong></div>
+                <div>Location: <strong id="modal-room">-</strong></div>
+                <div>Phone Number: <strong id="modal-phone">-</strong></div>
+                <div>Modem SSID: <strong id="modal-ssid">-</strong></div>
+                <div>Total Packages: <strong id="modal-pkg-count">0</strong></div>
             </div>
-            <h4 style="margin: 0.5rem 0 0 0; font-size: 0.95rem; font-weight: 700; color: var(--text-main);">Daftar Paket Aktif</h4>
+            <h4 style="margin: 0.5rem 0 0 0; font-size: 0.95rem; font-weight: 700; color: var(--text-main);">Active Package Breakdown</h4>
             <div class="orbit-package-list" id="modal-package-list">
                 <!-- Package items inserted by JS -->
             </div>
@@ -765,32 +803,37 @@
 </div>
 
 <!-- Notification Toast -->
-<div class="orbit-toast" id="orbit-toast">Sinkronisasi kuota Orbit berhasil dimulai!</div>
+<div class="orbit-toast" id="orbit-toast">Syncing Orbit modem data...</div>
 
 <script>
 document.addEventListener('DOMContentLoaded', () => {
     // 1. Filter Pills
     const filterPills = document.querySelectorAll('.orbit-pill');
-    const cards = document.querySelectorAll('.orbit-card');
+
+    function applyActiveFilter() {
+        const activePill = document.querySelector('.orbit-pill.active');
+        const filter = activePill ? activePill.getAttribute('data-filter') : 'all';
+        const cards = document.querySelectorAll('.orbit-card');
+
+        cards.forEach(card => {
+            const status = card.getAttribute('data-status');
+            if (filter === 'all') {
+                card.style.display = '';
+            } else if (filter === 'active') {
+                card.style.display = (status === 'active') ? '' : 'none';
+            } else if (filter === 'idle') {
+                card.style.display = (status === 'idle') ? '' : 'none';
+            } else if (filter === 'ex_customer') {
+                card.style.display = (status === 'ex_customer') ? '' : 'none';
+            }
+        });
+    }
 
     filterPills.forEach(pill => {
         pill.addEventListener('click', () => {
             filterPills.forEach(p => p.classList.remove('active'));
             pill.classList.add('active');
-
-            const filter = pill.getAttribute('data-filter');
-            cards.forEach(card => {
-                const status = card.getAttribute('data-status');
-                if (filter === 'all') {
-                    card.style.display = '';
-                } else if (filter === 'active') {
-                    card.style.display = (status === 'active') ? '' : 'none';
-                } else if (filter === 'idle') {
-                    card.style.display = (status === 'idle') ? '' : 'none';
-                } else if (filter === 'ex_customer') {
-                    card.style.display = (status === 'ex_customer') ? '' : 'none';
-                }
-            });
+            applyActiveFilter();
         });
     });
 
@@ -804,6 +847,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const pkgList = document.getElementById('modal-package-list');
 
     function closeModal() {
+        if (!backdrop) return;
         backdrop.classList.remove('open');
         backdrop.setAttribute('aria-hidden', 'true');
     }
@@ -819,63 +863,72 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && backdrop.classList.contains('open')) {
+        if (e.key === 'Escape' && backdrop && backdrop.classList.contains('open')) {
             closeModal();
         }
     });
 
-    document.querySelectorAll('.btn-detail').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const room = btn.getAttribute('data-room');
-            const phone = btn.getAttribute('data-phone');
-            const ssid = btn.getAttribute('data-ssid');
-            const packagesRaw = btn.getAttribute('data-packages');
+    function openModalForButton(btn) {
+        const room = btn.getAttribute('data-room');
+        const phone = btn.getAttribute('data-phone');
+        const ssid = btn.getAttribute('data-ssid');
+        const packagesRaw = btn.getAttribute('data-packages');
 
-            modalRoom.textContent = room || '-';
-            modalPhone.textContent = phone || '-';
-            modalSsid.textContent = ssid || '-';
+        modalRoom.textContent = room || '-';
+        modalPhone.textContent = phone || '-';
+        modalSsid.textContent = ssid || '-';
 
-            let packages = [];
-            try {
-                packages = JSON.parse(packagesRaw || '[]');
-            } catch (err) {
-                console.error('Failed parsing packages JSON', err);
+        let packages = [];
+        try {
+            packages = JSON.parse(packagesRaw || '[]');
+        } catch (err) {
+            console.error('Failed parsing packages JSON', err);
+        }
+
+        modalPkgCount.textContent = packages.length;
+        pkgList.innerHTML = '';
+
+        if (packages.length === 0) {
+            pkgList.innerHTML = '<div style="color: var(--text-muted); font-size: 0.85rem; padding: 1rem; text-align: center;">No package details available.</div>';
+        } else {
+            packages.forEach(p => {
+                const item = document.createElement('div');
+                item.className = 'orbit-package-item';
+
+                let daysBadge = '';
+                if (p.days_left !== null && p.days_left !== undefined) {
+                    const badgeColor = p.days_left > 14 ? '#059669' : (p.days_left > 3 ? '#B45309' : '#DC2626');
+                    daysBadge = ` <span style="color: ${badgeColor}; font-weight: 700;">(${p.days_left} days remaining)</span>`;
+                }
+
+                item.innerHTML = `
+                    <div class="orbit-pkg-info">
+                        <span class="orbit-pkg-name">${p.name || 'Orbit Package'}</span>
+                        <span class="orbit-pkg-expiry">Valid until: <strong>${p.expiry_str || '-'}</strong>${daysBadge}</span>
+                    </div>
+                    <div class="orbit-pkg-quota">
+                        <span class="orbit-pkg-rem">${p.remaining_gb} GB</span>
+                        <span class="orbit-pkg-total">of ${p.total_gb} GB</span>
+                    </div>
+                `;
+                pkgList.appendChild(item);
+            });
+        }
+
+        backdrop.classList.add('open');
+        backdrop.setAttribute('aria-hidden', 'false');
+    }
+
+    // Delegated click handler on the grid container for modal detail buttons
+    const gridContainer = document.getElementById('orbit-grid');
+    if (gridContainer) {
+        gridContainer.addEventListener('click', (e) => {
+            const btn = e.target.closest('.btn-detail');
+            if (btn && !btn.disabled) {
+                openModalForButton(btn);
             }
-
-            modalPkgCount.textContent = packages.length;
-            pkgList.innerHTML = '';
-
-            if (packages.length === 0) {
-                pkgList.innerHTML = '<div style="color: var(--text-muted); font-size: 0.85rem; padding: 1rem; text-align: center;">Tidak ada rincian paket tersedia.</div>';
-            } else {
-                packages.forEach(p => {
-                    const item = document.createElement('div');
-                    item.className = 'orbit-package-item';
-
-                    let daysBadge = '';
-                    if (p.days_left !== null && p.days_left !== undefined) {
-                        const badgeColor = p.days_left > 14 ? '#059669' : (p.days_left > 3 ? '#B45309' : '#DC2626');
-                        daysBadge = ` <span style="color: ${badgeColor}; font-weight: 700;">(${p.days_left} hari lagi)</span>`;
-                    }
-
-                    item.innerHTML = `
-                        <div class="orbit-pkg-info">
-                            <span class="orbit-pkg-name">${p.name || 'Paket Orbit'}</span>
-                            <span class="orbit-pkg-expiry">Berlaku s.d: <strong>${p.expiry_str || '-'}</strong>${daysBadge}</span>
-                        </div>
-                        <div class="orbit-pkg-quota">
-                            <span class="orbit-pkg-rem">${p.remaining_gb} GB</span>
-                            <span class="orbit-pkg-total">dari ${p.total_gb} GB</span>
-                        </div>
-                    `;
-                    pkgList.appendChild(item);
-                });
-            }
-
-            backdrop.classList.add('open');
-            backdrop.setAttribute('aria-hidden', 'false');
         });
-    });
+    }
 
     // 3. Sync Button
     const syncBtn = document.getElementById('btn-sync-orbit');
@@ -896,7 +949,7 @@ document.addEventListener('DOMContentLoaded', () => {
         syncBtn.addEventListener('click', async () => {
             syncBtn.classList.add('loading');
             syncIcon.textContent = '⏳';
-            syncText.textContent = 'Sinkronisasi...';
+            syncText.textContent = 'Syncing...';
 
             try {
                 const resp = await fetch('/api/orbit/sync', {
@@ -904,13 +957,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     headers: { 'Accept': 'application/json' }
                 });
                 if (resp.ok) {
-                    showToast('✅ Sinkronisasi kuota Orbit berhasil dimulai!');
+                    showToast('✅ Orbit modem quota sync started successfully!');
+                    refreshOrbitModems();
                 } else {
-                    showToast('⚠️ Gagal sinkronisasi kuota Orbit');
+                    showToast('⚠️ Failed to sync Orbit modem quota');
                 }
             } catch (err) {
                 console.error('Sync error', err);
-                showToast('❌ Kesalahan jaringan saat sinkronisasi');
+                showToast('❌ Network error during sync');
             } finally {
                 setTimeout(() => {
                     syncBtn.classList.remove('loading');
@@ -920,6 +974,199 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
+
+    // 4. Auto-refresh & Countdown (Phase 40)
+    const ORBIT_POLL_SECONDS = 180;
+    let orbitSecondsLeft = ORBIT_POLL_SECONDS;
+    const countdownEl = document.getElementById('orbit-countdown-timer');
+    const refreshAllBtn = document.getElementById('btn-orbit-refresh-all');
+
+    async function refreshOrbitModems() {
+        try {
+            const resp = await fetch('/api/orbit/modems', {
+                headers: { 'Accept': 'application/json' }
+            });
+            if (!resp.ok) return;
+            const data = await resp.json();
+            if (!data) return;
+
+            // Update KPI summary cards
+            if (data.summary) {
+                const totalEl = document.getElementById('kpi-total-modems');
+                const activeEl = document.getElementById('kpi-active-modems');
+                const remEl = document.getElementById('kpi-remaining-quota');
+                const subtextEl = document.getElementById('kpi-quota-subtext');
+                const soonEl = document.getElementById('kpi-expiring-soon');
+                const imeiEl = document.getElementById('kpi-imei-pending');
+
+                if (totalEl) totalEl.textContent = data.summary.total_modems;
+                if (activeEl) activeEl.textContent = data.summary.active_modems;
+                if (remEl) remEl.textContent = `${data.summary.total_remaining_gb} GB`;
+                if (subtextEl) subtextEl.textContent = `Out of ${data.summary.total_quota_gb} GB total`;
+                if (soonEl) {
+                    soonEl.textContent = data.summary.expiring_soon_count;
+                    soonEl.style.color = data.summary.expiring_soon_count > 0 ? '#F59E0B' : 'var(--primary)';
+                }
+                if (imeEl) {
+                    imeEl.textContent = data.summary.imei_pending_count;
+                    imeEl.style.color = data.summary.imei_pending_count > 0 ? '#DC2626' : 'var(--primary)';
+                }
+            }
+
+            // Update filter pill counts
+            if (data.stats) {
+                const pAll = document.getElementById('pill-filter-all');
+                const pActive = document.getElementById('pill-filter-active');
+                const pIdle = document.getElementById('pill-filter-idle');
+                const pEx = document.getElementById('pill-filter-ex');
+
+                if (pAll) pAll.textContent = `All Modems (${data.stats.all})`;
+                if (pActive) pActive.textContent = `Active in Room (${data.stats.active})`;
+                if (pIdle) pIdle.textContent = `Idle / Spare (${data.stats.idle})`;
+                if (pEx) pEx.textContent = `Decommissioned (${data.stats.ex_customer})`;
+            }
+
+            // Update Cards in DOM
+            if (data.modems && gridContainer) {
+                const activePill = document.querySelector('.orbit-pill.active');
+                const activeFilter = activePill ? activePill.getAttribute('data-filter') : 'all';
+
+                gridContainer.innerHTML = data.modems.map(m => {
+                    const target = m.target;
+                    const rem = m.total_remaining_gb;
+                    const tot = m.total_quota_gb;
+                    const pct = tot > 0 ? (rem / tot * 100).toFixed(1) : '0.0';
+                    const pctNum = parseFloat(pct);
+                    const fillColor = pctNum >= 30 ? 'green' : (pctNum >= 10 ? 'amber' : 'red');
+                    const pctColor = pctNum >= 30 ? '#10B981' : (pctNum >= 10 ? '#F59E0B' : '#EF4444');
+                    const isVisible = (activeFilter === 'all') ||
+                        (activeFilter === 'active' && target.status.toLowerCase() === 'active') ||
+                        (activeFilter === 'idle' && target.status.toLowerCase() === 'idle') ||
+                        (activeFilter === 'ex_customer' && target.status.toLowerCase() === 'ex_customer');
+                    const displayStyle = isVisible ? '' : 'style="display: none;"';
+
+                    let statusBadge = '';
+                    if (!target.imei_valid) {
+                        statusBadge = '<span class="orbit-status-pill imei-pending" title="10-digit ID requires 15-digit IMEI">⚠️ IMEI Pending</span>';
+                    } else if (target.status === 'ACTIVE') {
+                        statusBadge = '<span class="orbit-status-pill active">🟢 Active</span>';
+                    } else if (target.status === 'IDLE') {
+                        statusBadge = '<span class="orbit-status-pill idle">⚪ IDLE</span>';
+                    } else if (target.status === 'EX_CUSTOMER') {
+                        statusBadge = '<span class="orbit-status-pill ex-customer">🔴 Decommissioned</span>';
+                    }
+
+                    let quotaPctText = '-';
+                    if (target.imei_valid && tot > 0) {
+                        quotaPctText = `${pct}% remaining`;
+                    } else if (target.imei_valid) {
+                        quotaPctText = '0%';
+                    }
+
+                    let quotaNumbersHtml = '';
+                    if (target.imei_valid && tot > 0) {
+                        quotaNumbersHtml = `<strong>${rem} GB</strong> / ${tot} GB`;
+                    } else if (!target.imei_valid) {
+                        quotaNumbersHtml = '<em style="color: var(--text-muted);">Awaiting IMEI input</em>';
+                    } else {
+                        quotaNumbersHtml = '<strong>0.0 GB</strong> / 0.0 GB';
+                    }
+
+                    let expiryBadgeHtml = '';
+                    if (!target.imei_valid) {
+                        expiryBadgeHtml = '<span class="orbit-expiry-badge pending">⚠️ IMEI Pending (15 digits required)</span>';
+                    } else if (target.status === 'EX_CUSTOMER') {
+                        expiryBadgeHtml = '<span class="orbit-expiry-badge inactive">🔴 Decommissioned / Inactive</span>';
+                    } else if (m.earliest_expiry_str && m.earliest_days_left !== null && m.earliest_days_left !== undefined) {
+                        const days = m.earliest_days_left;
+                        const badgeClass = days > 14 ? 'safe' : (days > 3 ? 'soon' : 'critical');
+                        expiryBadgeHtml = `<span class="orbit-expiry-badge ${badgeClass}">⏳ Earliest expiry: ${m.earliest_expiry_str} (${days} days remaining)</span>`;
+                    } else if (m.earliest_expiry_str) {
+                        expiryBadgeHtml = `<span class="orbit-expiry-badge safe">⏳ Earliest expiry: ${m.earliest_expiry_str}</span>`;
+                    } else {
+                        expiryBadgeHtml = '<span class="orbit-expiry-badge inactive">⏳ Expiry not available</span>';
+                    }
+
+                    const pkgsJson = JSON.stringify(m.packages || []).replace(/"/g, '&quot;');
+                    const detailDisabled = (!target.imei_valid || !m.packages || m.packages.length === 0) ? 'disabled' : '';
+
+                    return `
+                    <div class="orbit-card" data-status="${target.status.toLowerCase()}" data-imei-valid="${target.imei_valid ? 'true' : 'false'}" ${displayStyle}>
+                        <div class="orbit-card-header">
+                            <div class="orbit-room-badge" title="${target.location}">
+                                📍 ${target.location}
+                            </div>
+                            <div>${statusBadge}</div>
+                        </div>
+                        <div class="orbit-card-body">
+                            <div class="orbit-specs-list">
+                                <div class="orbit-spec-item">
+                                    <span class="orbit-spec-label">Phone Number</span>
+                                    <span class="orbit-spec-val">${target.phone}</span>
+                                </div>
+                                <div class="orbit-spec-item">
+                                    <span class="orbit-spec-label">Modem SSID</span>
+                                    <span class="orbit-spec-val">${target.ssid}</span>
+                                </div>
+                                <div class="orbit-spec-item" style="grid-column: span 2;">
+                                    <span class="orbit-spec-label">IMEI</span>
+                                    <span class="orbit-spec-val">
+                                        ${target.imei}
+                                        ${!target.imei_valid ? '<span style="color: #D97706; font-size: 0.75rem;">(10 digit ID)</span>' : ''}
+                                    </span>
+                                </div>
+                            </div>
+                            <div class="orbit-quota-box">
+                                <div class="orbit-quota-header">
+                                    <span class="orbit-quota-title">Remaining Internet Quota</span>
+                                    <span class="orbit-quota-pct" style="color: ${pctColor};">${quotaPctText}</span>
+                                </div>
+                                <div class="orbit-progress-track">
+                                    <div class="orbit-progress-fill ${fillColor}" style="width: ${target.imei_valid && tot > 0 ? pct : 0}%;"></div>
+                                </div>
+                                <div class="orbit-quota-numbers">
+                                    <span>${quotaNumbersHtml}</span>
+                                </div>
+                            </div>
+                            <div>${expiryBadgeHtml}</div>
+                        </div>
+                        <div class="orbit-card-footer">
+                            <button class="btn-detail" type="button"
+                                data-no="${target.no}"
+                                data-room="${target.location}"
+                                data-phone="${target.phone}"
+                                data-ssid="${target.ssid}"
+                                data-packages="${pkgsJson}"
+                                ${detailDisabled}>
+                                📦 View Package Details (${m.packages ? m.packages.length : 0})
+                            </button>
+                        </div>
+                    </div>`;
+                }).join('');
+            }
+        } catch (err) {
+            console.error('Failed refreshing Orbit modems:', err);
+        }
+    }
+
+    if (refreshAllBtn) {
+        refreshAllBtn.addEventListener('click', () => {
+            orbitSecondsLeft = ORBIT_POLL_SECONDS;
+            if (countdownEl) countdownEl.textContent = orbitSecondsLeft;
+            refreshOrbitModems();
+        });
+    }
+
+    setInterval(() => {
+        orbitSecondsLeft -= 1;
+        if (orbitSecondsLeft <= 0) {
+            orbitSecondsLeft = ORBIT_POLL_SECONDS;
+            refreshOrbitModems();
+        }
+        if (countdownEl) {
+            countdownEl.textContent = orbitSecondsLeft;
+        }
+    }, 1000);
 });
 </script>
 {% endblock %}

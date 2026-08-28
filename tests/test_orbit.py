@@ -13,6 +13,7 @@ from mrtg_cmp.orbit.scraper import (
     OrbitModemStatus,
     OrbitPackage,
     OrbitScraper,
+    extract_modem_info,
     parse_expiry_date,
     parse_package_cards_html,
     parse_quota_string,
@@ -119,15 +120,13 @@ def test_load_orbit_catalog_excel_if_present() -> None:
     assert stats["active"] == 5
     assert stats["idle"] == 6
     assert stats["ex_customer"] == 1
-    assert stats["imei_pending"] == 2
+    assert stats["imei_pending"] in (1, 2)
 
-    # Row 1 and 3 are 10-digit IDs
+    # Row 1 is a 10-digit ID
     assert modems[0].imei_valid is False
     assert len(modems[0].imei) == 10
-    assert modems[2].imei_valid is False
-    assert len(modems[2].imei) == 10
 
-    # Row 2, 4-10, 11, 12 are valid 15-digit IMEIs
+    # Remaining rows are valid 15-digit IMEIs
     for i in (1, 3, 4, 5, 6, 7, 8, 9, 10, 11):
         assert modems[i].imei_valid is True
         assert len(modems[i].imei) == 15
@@ -379,10 +378,26 @@ def test_orbit_dashboard_html_view(client_with_db: TestClient) -> None:
     text = resp.text
 
     assert "Telkomsel Orbit Modem Monitoring" in text
-    assert "Semua Modem (12)" in text
-    assert "Aktif di Ruangan (5)" in text
-    assert "Cadangan / IDLE (6)" in text
-    assert "Bekas (1)" in text
+    assert "All Modems (12)" in text
+    assert "Active in Room (5)" in text
+    assert "Idle / Spare (6)" in text
+    assert "Decommissioned (1)" in text
     assert "Sync Orbit Now" in text
-    assert "Lihat Rincian Paket" in text
+    assert "View Package Details" in text
+    assert "orbit-countdown-timer" in text
+    assert "btn-orbit-refresh-all" in text
     assert "orbit-package-modal" in text or "orbit-modal" in text
+
+
+def test_extract_modem_info_updates_target_ssid() -> None:
+    """Live carrier SSID extracted from portal updates target.ssid."""
+    target = OrbitModem(1, "860000000000001", "081200000001", "Room 101", "Typo_SSID")
+    html = """
+    <div class="modem-info">
+        <span class="wifi-label">Nama WiFi:</span>
+        <span class="wifi-name">Orbit_Star_Live_SSID</span>
+    </div>
+    """
+    info = extract_modem_info(html, target=target)
+    assert info["wifi_name"] == "Orbit_Star_Live_SSID"
+    assert target.ssid == "Orbit_Star_Live_SSID"

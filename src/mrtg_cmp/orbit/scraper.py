@@ -316,6 +316,61 @@ def parse_package_cards_html(html: str, now: datetime | None = None) -> list[Orb
     return packages
 
 
+def extract_modem_info(
+    html_or_driver: Any,
+    target: OrbitModem | None = None,
+) -> dict[str, Any]:
+    """Extract live modem info such as wifi_name (SSID) from MyOrbit portal HTML or driver.
+
+    When wifi_name is extracted and target is provided, updates target.ssid
+    with the live carrier SSID so any typos in Excel or CSV catalogs are
+    corrected in the cached status manifest.
+    """
+    if hasattr(html_or_driver, "page_source"):
+        html = str(html_or_driver.page_source or "")
+    else:
+        html = str(html_or_driver or "")
+
+    info: dict[str, Any] = {}
+    if not html:
+        return info
+
+    wifi_name = ""
+    # Pattern 1: HTML tags following Nama WiFi or SSID label
+    m = re.search(
+        r"(?:Nama\s+Wi[-]?Fi|WiFi\s+Name|SSID)\s*[:]?\s*<(?:[a-zA-Z0-9]+)[^>]*>(.*?)</(?:[a-zA-Z0-9]+)>",
+        html,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if m:
+        wifi_name = re.sub(r"<[^>]+>", "", m.group(1)).strip()
+    else:
+        # Pattern 2: Plain text after label
+        m2 = re.search(
+            r"(?:Nama\s+Wi[-]?Fi|WiFi\s+Name|SSID)\s*[:]\s*([^\n<]+)",
+            html,
+            re.IGNORECASE,
+        )
+        if m2:
+            wifi_name = m2.group(1).strip()
+        else:
+            # Pattern 3: class/id matching wifi-name or ssid
+            m3 = re.search(
+                r"<(?:[a-zA-Z0-9]+)[^>]*class=[\"'][^\"']*(?:wifi-name|modem-ssid|ssid)[^\"']*[\"'][^>]*>(.*?)</(?:[a-zA-Z0-9]+)>",
+                html,
+                re.IGNORECASE | re.DOTALL,
+            )
+            if m3:
+                wifi_name = re.sub(r"<[^>]+>", "", m3.group(1)).strip()
+
+    if wifi_name:
+        info["wifi_name"] = wifi_name
+        if target is not None:
+            target.ssid = wifi_name
+
+    return info
+
+
 class OrbitScraper:
     """Headless web automation scraper for MyOrbit portal."""
 
@@ -446,6 +501,7 @@ class OrbitScraper:
                 )
             )
             page_text = driver.page_source
+            extract_modem_info(page_text, target=target)
             total_rem, total_quota = parse_quota_string(page_text)
             multimedia = "multimedia" in page_text.lower()
 

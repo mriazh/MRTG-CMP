@@ -67,6 +67,7 @@ class ConsoleSessionManager:
                 use_ssl=False,
                 plaintext_login=True,
             )
+            pool.set_timeout(15)
             client = pool.get_api()
             # Query router identity
             identity = "MikroTik"

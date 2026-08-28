@@ -448,8 +448,8 @@ def test_orbit_route_renders_dashboard(client_with_db: TestClient) -> None:
     assert resp.status_code == 200
     assert "Telkomsel Orbit" in resp.text
     assert "orbit-card" in resp.text
-    assert "Semua Modem" in resp.text
-    assert "Aktif di Ruangan" in resp.text
+    assert "All Modems" in resp.text
+    assert "Active in Room" in resp.text
 
 def test_dashboard_renders_netcare_section(client_with_db: TestClient) -> None:
     """The unified dashboard renders the Netcare branch grid and filter pills."""
@@ -558,8 +558,8 @@ def test_dashboard_renders_netcare_progress_dialog(client_with_db: TestClient) -
     assert 'id="netcare-progress-eta"' not in resp.text
     assert "Estimasi selesai" not in resp.text
 
-    assert "Mengambil data grafik dari TelkomCare..." in resp.text
-    assert "cabang selesai" in resp.text
+    assert "Fetching graph data from TelkomCare..." in resp.text
+    assert "branches completed" in resp.text
 
     # Client-side wiring: dialog control, polling, and the auto-dismiss timer.
     assert "openNetcareProgress" in resp.text
@@ -573,7 +573,7 @@ def test_dashboard_renders_netcare_progress_dialog(client_with_db: TestClient) -
     # The dialog is polite: hidden until a query starts, and the copy reassures
     # the operator that the page stays usable.
     assert 'class="netcare-progress-backdrop"' in resp.text
-    assert "halaman tetap bisa digunakan" in resp.text
+    assert "page remains fully interactive" in resp.text
 
 
 def test_dashboard_dialog_ships_only_an_elapsed_stopwatch_and_a_stage_badge(
@@ -591,7 +591,7 @@ def test_dashboard_dialog_ships_only_an_elapsed_stopwatch_and_a_stage_badge(
     assert resp.status_code == 200
     assert 'id="netcare-progress-elapsed"' in resp.text
     assert 'id="netcare-progress-stage"' in resp.text
-    assert "Waktu berjalan:" in resp.text
+    assert "Elapsed time:" in resp.text
     assert "00:00" in resp.text
 
     # The countdown is gone, element and formatter both.
@@ -610,7 +610,7 @@ def test_dashboard_dialog_ships_only_an_elapsed_stopwatch_and_a_stage_badge(
     assert "setNetcareStage" in resp.text
     assert "netcareElapsed += 1" in resp.text
     assert "setNetcareTimers" not in resp.text
-    assert 'role="status" aria-live="polite">Menyiapkan' in resp.text
+    assert 'role="status" aria-live="polite">Preparing' in resp.text
 
 
 def test_dashboard_dialog_cancel_button_reaches_the_cancel_endpoint(
@@ -626,8 +626,8 @@ def test_dashboard_dialog_cancel_button_reaches_the_cancel_endpoint(
     assert "cancelNetcareQuery" in resp.text
     # Cancelling and hiding stay distinct: the operator can still watch a job run.
     assert 'id="netcare-progress-dismiss"' in resp.text
-    assert "Batalkan" in resp.text
-    assert "Sembunyikan" in resp.text
+    assert "Cancel" in resp.text
+    assert "Hide" in resp.text
     assert "data.cancelled" in resp.text
 
 
@@ -1703,7 +1703,7 @@ def test_service_filter_bar_lists_every_service_with_its_legend() -> None:
     assert 'id="netcare-service-filter"' in template
     assert 'aria-label="Filter branches by service type"' in template
     assert 'data-service="ALL"' in template
-    assert "Semua Layanan ({{ netcare_total }})" in template
+    assert "All Services ({{ netcare_total }})" in template
     assert "{% for service in netcare_services %}" in template
     assert "{{ service.label }} ({{ service.description }} - {{ service.count }})" in template
     assert 'class="netcare-legend-dot {{ service.badge_class }}"' in template
@@ -1757,7 +1757,7 @@ def test_dashboard_renders_the_service_legend_with_real_counts(
     resp = client_with_db.get("/", cookies=login_resp.cookies)
 
     assert resp.status_code == 200
-    assert "Semua Layanan (18)" in resp.text
+    assert "All Services (18)" in resp.text
     assert "Astinet (Internet Dedicated - 6)" in resp.text
     assert "Metro-E (Ethernet L2 - 5)" in resp.text
     assert "VPN IP (Intranet - 7)" in resp.text
@@ -1849,7 +1849,7 @@ def test_progress_dialog_markup_has_no_eta_or_remaining_elements() -> None:
     assert "netcare_estimated_seconds" not in dialog
     # The one remaining timer is the factual elapsed stopwatch.
     assert 'id="netcare-progress-elapsed"' in dialog
-    assert "Waktu berjalan:" in dialog
+    assert "Elapsed time:" in dialog
     assert dialog.count('class="netcare-timer-value"') == 1
 
 

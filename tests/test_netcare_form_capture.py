@@ -351,6 +351,7 @@ def test_capture_uses_the_mode_url_and_types_the_target_then_shows_the_graph(
     target_type: NetcareTargetType,
     expected_url: str,
     expected_input: str,
+    sleeps: list[float],
 ) -> None:
     """The target is typed into the mode's own input, not handed over in the URL."""
 
@@ -366,7 +367,10 @@ def test_capture_uses_the_mode_url_and_types_the_target_then_shows_the_graph(
 
 
 @pytest.mark.parametrize("target_type", [NetcareTargetType.SID, NetcareTargetType.GRAPH_TITLE])
-def test_capture_clicks_show_graph_through_javascript(target_type: NetcareTargetType) -> None:
+def test_capture_clicks_show_graph_through_javascript(
+    target_type: NetcareTargetType,
+    sleeps: list[float],
+) -> None:
     """``a.btn-graph`` is clicked via JS, which survives the portal's overlay."""
 
     portal = FakePortal(target_type)
@@ -464,7 +468,7 @@ def test_a_missing_filter_never_degrades_into_a_misleading_graph_timeout() -> No
     assert "Graph did not render" not in str(excinfo.value)
 
 
-def test_graph_title_filter_uses_the_real_element_ids() -> None:
+def test_graph_title_filter_uses_the_real_element_ids(sleeps: list[float]) -> None:
     """``By.ID`` never matches ``#startdate``; the hash is not part of an id."""
 
     portal = FakePortal(NetcareTargetType.GRAPH_TITLE)
@@ -473,6 +477,7 @@ def test_graph_title_filter_uses_the_real_element_ids() -> None:
 
     assert portal.field_sets == [("startdate", START), ("enddate", END)]
     assert portal.js_clicks[-1].kind == "graphfilter"
+    assert service_module.FILTER_SETTLE_SECONDS in sleeps
 
 
 def test_sid_capture_never_touches_the_graph_title_ids() -> None:

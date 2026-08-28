@@ -1051,7 +1051,7 @@
         <div class="netcare-service-bar" id="netcare-service-filter" role="group" aria-label="Filter branches by service type">
             <span class="netcare-service-legend-label">Service Type</span>
             <button type="button" class="netcare-pill netcare-service-pill active" data-service="ALL">
-                Semua Layanan ({{ netcare_total }})
+                All Services ({{ netcare_total }})
             </button>
             {% for service in netcare_services %}
             <button type="button" class="netcare-pill netcare-service-pill {{ service.badge_class }}"
@@ -1143,22 +1143,22 @@
      aria-labelledby="netcare-progress-title" aria-describedby="netcare-progress-sub">
     <div class="netcare-progress">
         <div id="netcare-progress-spinner" class="netcare-spinner" role="status" aria-live="polite"></div>
-        <div class="netcare-progress-title" id="netcare-progress-title">Mengambil data grafik dari TelkomCare...</div>
-        <div class="netcare-progress-sub" id="netcare-progress-sub">Mohon tunggu sebentar, halaman tetap bisa digunakan.</div>
-        <div class="netcare-progress-stage" id="netcare-progress-stage" role="status" aria-live="polite">Menyiapkan...</div>
+        <div class="netcare-progress-title" id="netcare-progress-title">Fetching graph data from TelkomCare...</div>
+        <div class="netcare-progress-sub" id="netcare-progress-sub">Please wait a moment, the page remains fully interactive.</div>
+        <div class="netcare-progress-stage" id="netcare-progress-stage" role="status" aria-live="polite">Preparing...</div>
         <div class="netcare-progress-track">
             <div class="netcare-progress-bar" id="netcare-progress-bar" role="progressbar"
                  aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-labelledby="netcare-progress-count"></div>
         </div>
-        <div class="netcare-progress-count" id="netcare-progress-count">0 / {{ netcare_total }} cabang selesai</div>
+        <div class="netcare-progress-count" id="netcare-progress-count">0 / {{ netcare_total }} branches completed</div>
         <div class="netcare-timers">
-            <span>Waktu berjalan: <span class="netcare-timer-value" id="netcare-progress-elapsed">00:00</span></span>
+            <span>Elapsed time: <span class="netcare-timer-value" id="netcare-progress-elapsed">00:00</span></span>
         </div>
         <div class="netcare-progress-actions" id="netcare-progress-actions">
             <button type="button" id="netcare-progress-cancel" class="btn btn-secondary"
-                    style="padding: 0.35rem 0.7rem; font-size: 0.78rem;">Batalkan</button>
+                    style="padding: 0.35rem 0.7rem; font-size: 0.78rem;">Cancel</button>
             <button type="button" id="netcare-progress-dismiss" class="btn btn-secondary"
-                    style="padding: 0.35rem 0.7rem; font-size: 0.78rem;">Sembunyikan</button>
+                    style="padding: 0.35rem 0.7rem; font-size: 0.78rem;">Hide</button>
         </div>
     </div>
 </div>
@@ -1769,10 +1769,10 @@
             openNetcareProgress();
             fetch(`/api/netcare/refresh/${encodeURIComponent(targetId)}`, { method: 'POST' })
                 .then(() => loadNetcare(netcareActiveDay))
-                .then(() => finishNetcareProgress('done', 'Cabang dijadwalkan untuk pengambilan berikutnya.'))
+                .then(() => finishNetcareProgress('done', 'Branch scheduled for priority capture.'))
                 .catch(err => {
                     console.error("Netcare priority refresh error:", err);
-                    finishNetcareProgress('failed', `Gagal menjadwalkan cabang: ${err.message}`);
+                    finishNetcareProgress('failed', `Failed to schedule branch: ${err.message}`);
                 });
         });
 
@@ -1820,7 +1820,21 @@
         }
 
         function setNetcareStage(stage) {
-            if (stage) netcareProgressStage.textContent = stage;
+            if (!stage) return;
+            const stageTranslations = {
+                'Membuka browser & login...': 'Launching browser & authenticating...',
+                'Menunggu worker...': 'Waiting for worker...',
+                'Menyelesaikan CAPTCHA...': 'Solving CAPTCHA...',
+                'Selesai': 'Done',
+                'Gagal': 'Failed',
+                'Dibatalkan operator': 'Cancelled by operator',
+                'Menyiapkan...': 'Preparing...'
+            };
+            let translated = stageTranslations[stage] || stage;
+            if (translated.startsWith('Mengambil link:')) {
+                translated = translated.replace('Mengambil link:', 'Fetching link:');
+            }
+            netcareProgressStage.textContent = translated;
         }
 
         function setNetcareProgress(completed, total) {
@@ -1828,7 +1842,7 @@
             const percent = Math.min(100, Math.round((completed / safeTotal) * 100));
             netcareProgressBar.style.width = `${percent}%`;
             netcareProgressBar.setAttribute('aria-valuenow', String(percent));
-            netcareProgressCount.textContent = `${completed} / ${total} cabang selesai`;
+            netcareProgressCount.textContent = `${completed} / ${total} branches completed`;
         }
 
         function openNetcareProgress() {
@@ -1836,9 +1850,9 @@
             netcareProgressSpinner.className = 'netcare-spinner';
             netcareProgressSpinner.textContent = '';
             netcareProgressBar.className = 'netcare-progress-bar';
-            netcareProgressTitle.textContent = 'Mengambil data grafik dari TelkomCare...';
-            netcareProgressSub.textContent = 'Mohon tunggu sebentar, halaman tetap bisa digunakan.';
-            netcareProgressStage.textContent = 'Menyiapkan...';
+            netcareProgressTitle.textContent = 'Fetching graph data from TelkomCare...';
+            netcareProgressSub.textContent = 'Please wait a moment, the page remains fully interactive.';
+            netcareProgressStage.textContent = 'Preparing...';
             netcareProgressActions.style.display = 'flex';
             setNetcareProgress(0, NETCARE_TOTAL);
             setNetcareElapsed();
@@ -1862,8 +1876,8 @@
             stopNetcarePolling();
             netcareJobId = null;
             fetch(`/api/netcare/cancel?job_id=${encodeURIComponent(jobId)}`, { method: 'POST' })
-                .then(() => finishNetcareProgress('failed', 'Pengambilan data dibatalkan operator.'))
-                .catch(() => finishNetcareProgress('failed', 'Gagal membatalkan pengambilan data.'));
+                .then(() => finishNetcareProgress('failed', 'Data retrieval cancelled by operator.'))
+                .catch(() => finishNetcareProgress('failed', 'Failed to cancel data retrieval.'));
         }
 
         function stopNetcarePolling() {
@@ -1875,8 +1889,8 @@
             netcareProgressSpinner.textContent = state === 'done' ? '✓' : '!';
             netcareProgressBar.className = `netcare-progress-bar ${state}`;
             netcareProgressTitle.textContent = state === 'done'
-                ? 'Data grafik TelkomCare siap'
-                : 'Pengambilan data terhenti';
+                ? 'TelkomCare graph data ready'
+                : 'Data retrieval stopped';
             netcareProgressSub.textContent = message;
             netcareProgressActions.style.display = 'none';
             setNetcareProgress(state === 'done' ? NETCARE_TOTAL : 0, NETCARE_TOTAL);
@@ -1896,21 +1910,21 @@
                         return;
                     }
                     if (data.cancelled) {
-                        finishNetcareProgress('failed', 'Pengambilan data dibatalkan operator.');
+                        finishNetcareProgress('failed', 'Data retrieval cancelled by operator.');
                         netcareJobId = null;
                         return;
                     }
                     netcareActiveDay = data.image_url_day || '';
                     loadNetcare(netcareActiveDay);
                     if (data.error) {
-                        finishNetcareProgress('failed', `Gagal: ${data.error}`);
+                        finishNetcareProgress('failed', `Failed: ${data.error}`);
                     } else {
-                        finishNetcareProgress('done', 'Semua grafik telah diperbarui.');
+                        finishNetcareProgress('done', 'Graphs successfully updated');
                     }
                     netcareJobId = null;
                 })
                 .catch(err => {
-                    finishNetcareProgress('failed', `Gagal menghubungi server: ${err.message}`);
+                    finishNetcareProgress('failed', `Failed to contact server: ${err.message}`);
                     netcareJobId = null;
                 });
         }
@@ -1934,7 +1948,7 @@
                     setNetcareProgress(data.completed || 0, data.total || NETCARE_TOTAL);
                     pollNetcareStatus();
                 })
-                .catch(err => finishNetcareProgress('failed', `Gagal memulai pengambilan data: ${err.message}`));
+                .catch(err => finishNetcareProgress('failed', `Failed to start data retrieval: ${err.message}`));
         }
 
         function activateNetcarePreset(preset) {

@@ -80,6 +80,9 @@ LOGIN_PATH = "/public/login"
 #: paints its next frame asynchronously, so interacting immediately after
 #: ``accept()`` lands on the pre-dismissal layout.
 ALERT_SETTLE_SECONDS = 1.0
+#: Seconds to wait after triggering the date filter reload before checking for
+#: the loading overlay and the rendered graph.
+FILTER_SETTLE_SECONDS = 2.0
 
 #: The portal's AJAX busy indicators. Whichever of them is still *displayed*
 #: after a form or filter submission means the graph request behind it is still
@@ -1127,6 +1130,8 @@ def _apply_graph_title_date_filter(
     )
     button = wait.until(ec.element_to_be_clickable((by.ID, "graphfilter")))
     driver.execute_script("arguments[0].click();", button)
+    _sleep(FILTER_SETTLE_SECONDS)
+    _wait_for_loading_overlay(driver)
 
 
 def _apply_date_filter(
@@ -1283,6 +1288,7 @@ __all__ = [
     "ALERT_SETTLE_SECONDS",
     "DEFAULT_INTERVAL_SECONDS",
     "DEFAULT_WORKERS",
+    "FILTER_SETTLE_SECONDS",
     "GRAPH_IMAGE_XPATH",
     "GRAPH_ISOLATION_SCRIPT",
     "GRAPH_RESTORE_SCRIPT",

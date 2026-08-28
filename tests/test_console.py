@@ -192,3 +192,21 @@ def test_resolve_command_tokens() -> None:
     assert args["address"] == "1.2.3.4/24"
     assert args["interface"] == "WAN"
 
+
+def test_console_auth_sets_pool_timeout() -> None:
+    """authenticate() sets 15s pool timeout on RouterOsApiPool."""
+    mgr = ConsoleSessionManager()
+    with patch("routeros_api.RouterOsApiPool") as mock_pool_cls:
+        mock_pool = MagicMock()
+        mock_pool_cls.return_value = mock_pool
+        mock_client = MagicMock()
+        mock_pool.get_api.return_value = mock_client
+        mock_identity_res = MagicMock()
+        mock_identity_res.get.return_value = [{"name": "MikroTik-Main"}]
+        mock_client.get_resource.return_value = mock_identity_res
+
+        success, token, identity = mgr.authenticate("127.0.0.1", 8728, "admin", "pass")
+        assert success is True
+        assert identity == "MikroTik-Main"
+        mock_pool.set_timeout.assert_called_once_with(15)
+

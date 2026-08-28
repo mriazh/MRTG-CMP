@@ -552,12 +552,18 @@ Console Bridge active via RouterOS API. Press TAB for autocomplete or type /help
         const savedToken = sessionStorage.getItem('mrtg_console_token');
         const savedPrompt = sessionStorage.getItem('mrtg_console_prompt');
         const savedIdentity = sessionStorage.getItem('mrtg_console_identity');
+        const expires = parseInt(sessionStorage.getItem('mrtg_console_expires') || '0', 10);
 
-        if (savedToken && savedPrompt) {
+        if (savedToken && savedPrompt && Date.now() < expires) {
             sessionToken = savedToken;
             activePrompt = savedPrompt;
+            inactivitySeconds = Math.max(0, Math.floor((expires - Date.now()) / 1000));
             activateTerminalUI(savedIdentity || 'MikroTik');
         } else {
+            sessionStorage.removeItem('mrtg_console_token');
+            sessionStorage.removeItem('mrtg_console_prompt');
+            sessionStorage.removeItem('mrtg_console_identity');
+            sessionStorage.removeItem('mrtg_console_expires');
             showAuthGate();
         }
 
@@ -574,16 +580,6 @@ Console Bridge active via RouterOS API. Press TAB for autocomplete or type /help
         // Reset inactivity timer on any user click or keypress
         window.addEventListener('click', resetInactivityTimer);
         window.addEventListener('keydown', resetInactivityTimer);
-
-        // Security Anti-Linger: Terminate session on tab close or navigation
-        window.addEventListener('beforeunload', () => {
-            if (sessionToken) {
-                const payload = JSON.stringify({ token: sessionToken });
-                if (navigator.sendBeacon) {
-                    navigator.sendBeacon('/api/console/terminate', new Blob([payload], { type: 'application/json' }));
-                }
-            }
-        });
     });
 
     function showAuthGate() {
@@ -636,6 +632,8 @@ Console Bridge active via RouterOS API. Press TAB for autocomplete or type /help
                 sessionStorage.setItem('mrtg_console_token', sessionToken);
                 sessionStorage.setItem('mrtg_console_prompt', activePrompt);
                 sessionStorage.setItem('mrtg_console_identity', data.identity || 'MikroTik');
+                sessionStorage.setItem('mrtg_console_expires', Date.now() + 300000);
+                inactivitySeconds = 300;
                 passwordInput.value = '';
                 activateTerminalUI(data.identity);
             } else {
@@ -665,17 +663,21 @@ Console Bridge active via RouterOS API. Press TAB for autocomplete or type /help
         sessionStorage.removeItem('mrtg_console_token');
         sessionStorage.removeItem('mrtg_console_prompt');
         sessionStorage.removeItem('mrtg_console_identity');
+        sessionStorage.removeItem('mrtg_console_expires');
         showAuthGate();
     }
 
     function resetInactivityTimer() {
         inactivitySeconds = 300;
+        sessionStorage.setItem('mrtg_console_expires', Date.now() + 300000);
         updateTimerDisplay();
     }
 
     function startInactivityTimer() {
         if (inactivityInterval) clearInterval(inactivityInterval);
-        inactivitySeconds = 300;
+        if (inactivitySeconds <= 0) {
+            inactivitySeconds = 300;
+        }
         updateTimerDisplay();
         inactivityInterval = setInterval(() => {
             inactivitySeconds -= 1;
