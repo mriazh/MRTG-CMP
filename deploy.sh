@@ -3,7 +3,7 @@
 # MRTG-CMP - Automated Deployment Script
 # Target: Debian 13 (Production Host)
 # Pulls updates, syncs dependencies, migrates legacy mrtg-poncab-* systemd units
-# to the standardized mrtg-cmp-* units, and verifies all three services.
+# to the standardized mrtg-cmp-* units, and verifies all four services.
 # ==============================================================================
 set -e
 
@@ -11,7 +11,8 @@ APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_USER="$(id -un)"
 cd "$APP_DIR"
 
-NEW_UNITS=(mrtg-cmp-web mrtg-cmp-collector mrtg-cmp-netcare)
+UNITS=("mrtg-cmp-web" "mrtg-cmp-collector" "mrtg-cmp-netcare" "mrtg-cmp-orbit")
+NEW_UNITS=("${UNITS[@]}")
 LEGACY_UNITS=(mrtg-poncab mrtg-poncab-web mrtg-poncab-collector)
 
 echo "=========================================================="
@@ -85,7 +86,7 @@ rm -rf "$APP_DIR"/matplotlib-*
 
 echo "📦 5/7 Installing mrtg-cmp-* systemd units..."
 sudo systemctl daemon-reload
-for unit in "${NEW_UNITS[@]}"; do
+for unit in "${UNITS[@]}"; do
     template="$APP_DIR/systemd/$unit.service"
     if [ ! -f "$template" ]; then
         echo "❌ [DEPLOY ERROR] Missing unit template: $template"
@@ -98,14 +99,14 @@ done
 sudo systemctl daemon-reload
 
 echo "🔄 6/7 Enabling and restarting services (~0.2s)..."
-for unit in "${NEW_UNITS[@]}"; do
+for unit in "${UNITS[@]}"; do
     sudo systemctl enable "$unit.service" >/dev/null 2>&1 || true
     sudo systemctl restart "$unit.service"
     echo "   → $unit.service restarted"
 done
 
 echo "✅ 7/7 Verifying service health..."
-for unit in "${NEW_UNITS[@]}"; do
+for unit in "${UNITS[@]}"; do
     sudo systemctl status "$unit.service" --no-pager -n 2
 done
 
@@ -113,4 +114,5 @@ echo "=========================================================="
 echo "🎉 Update complete!"
 echo "   Web dashboard : http://<host>:8000"
 echo "   Netcare cache : $APP_DIR/data/netcare_cache"
+echo "   Orbit cache   : $APP_DIR/data/orbit_cache"
 echo "=========================================================="

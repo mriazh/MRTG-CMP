@@ -53,6 +53,20 @@ def test_cli_parser_netcare_command() -> None:
     assert default_args.iterations is None
 
 
+def test_cli_parser_orbit_command() -> None:
+    """Ensure the orbit daemon subcommand exposes interval and iteration options."""
+    parser = build_parser()
+
+    args = parser.parse_args(["orbit", "--interval", "900", "-n", "3"])
+    assert args.command == "orbit"
+    assert args.interval == 900
+    assert args.iterations == 3
+
+    default_args = parser.parse_args(["orbit"])
+    assert default_args.interval is None
+    assert default_args.iterations is None
+
+
 def test_cli_parser_all_supports_netcare_flag() -> None:
     """Ensure `all` can optionally manage the Netcare scraper too."""
     parser = build_parser()
@@ -111,6 +125,75 @@ def test_cli_netcare_reports_disabled_service(
 
     monkeypatch.setattr(cli_module.settings, "netcare_enabled", False)
     assert cli_module.main(["netcare"]) == 1
+
+
+def test_cli_orbit_runs_daemon(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`orbit` builds a daemon from settings and runs one bounded round."""
+    from mrtg_cmp import cli as cli_module
+
+    monkeypatch.setattr(cli_module.settings, "orbit_enabled", True)
+
+    rounds: list[int] = []
+    observed: dict[str, int | None] = {}
+
+    class StubOrbitDaemon:
+        def __init__(self, interval_seconds: int = 1800) -> None:
+            self.interval_seconds = interval_seconds
+
+        def install_signal_handlers(self, stop_event: object) -> None:
+            return None
+
+        def run(self, stop_event: object = None, max_rounds: int | None = None) -> int:
+            observed["interval"] = self.interval_seconds
+            observed["max_rounds"] = max_rounds
+            rounds.append(1)
+            return 1
+
+    monkeypatch.setattr(
+        cli_module, "build_orbit_daemon_from_settings", lambda cfg=None: StubOrbitDaemon(1800)
+    )
+
+    assert cli_module.main(["orbit", "--interval", "900", "-n", "1"]) == 0
+    assert len(rounds) == 1
+    assert observed["interval"] == 900
+    assert observed["max_rounds"] == 1
+
+
+def test_cli_orbit_reports_disabled_service(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`orbit` refuses to start when the scraper is disabled by configuration."""
+    from mrtg_cmp import cli as cli_module
+
+    monkeypatch.setattr(cli_module.settings, "orbit_enabled", False)
+    assert cli_module.main(["orbit"]) == 1
+
+
+def test_cli_orbit_handles_keyboard_interrupt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`orbit` handles KeyboardInterrupt cleanly and returns 0."""
+    from mrtg_cmp import cli as cli_module
+
+    monkeypatch.setattr(cli_module.settings, "orbit_enabled", True)
+
+    class StubInterruptDaemon:
+        def __init__(self) -> None:
+            self.interval_seconds = 1800
+
+        def install_signal_handlers(self, stop_event: object) -> None:
+            return None
+
+        def run(self, stop_event: object = None, max_rounds: int | None = None) -> int:
+            raise KeyboardInterrupt()
+
+    monkeypatch.setattr(
+        cli_module, "build_orbit_daemon_from_settings", lambda cfg=None: StubInterruptDaemon()
+    )
+
+    assert cli_module.main(["orbit"]) == 0
 
 
 def test_cli_all_starts_netcare_thread(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

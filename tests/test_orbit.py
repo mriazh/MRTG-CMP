@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -20,7 +21,12 @@ from mrtg_cmp.orbit.scraper import (
     parse_package_cards_html,
     parse_quota_string,
 )
-from mrtg_cmp.orbit.service import OrbitService, build_orbit_driver
+from mrtg_cmp.orbit.service import (
+    OrbitDaemon,
+    OrbitService,
+    build_orbit_daemon_from_settings,
+    build_orbit_driver,
+)
 from mrtg_cmp.orbit.targets import (
     OrbitModem,
     _default_orbit_catalog,
@@ -1079,4 +1085,104 @@ def test_cli_orbit_sync(capsys: Any, tmp_path: Path) -> None:
         captured = capsys.readouterr()
         assert "[IMEI_PENDING] 081200000001 (SSID-1): IMEI_PENDING" in captured.out
         assert "[OK] 081200000002 (tselhome-8BCB): 85.29 GB / 85.29 GB" in captured.out
+
+
+def test_orbit_daemon_runs_single_round(tmp_path: Path) -> None:
+    """OrbitDaemon runs a single round and persists status to cache."""
+    cache = OrbitCache(tmp_path / "modems.json")
+    catalog = [
+        OrbitModem(1, "1700000001", "081200000001", "Room 1", "SSID-1"),
+        OrbitModem(2, "860000000000002", "081200000002", "Room 2", "SSID-2"),
+    ]
+    mock_service = MagicMock(spec=OrbitService)
+    mock_service.sync_all.return_value = [
+        OrbitModemStatus(target=catalog[0], error="IMEI_PENDING"),
+        OrbitModemStatus(target=catalog[1], total_remaining_gb=10.0, total_quota_gb=20.0),
+    ]
+
+    daemon = OrbitDaemon(
+        service=mock_service,
+        catalog_loader=lambda: catalog,
+        cache=cache,
+        interval_seconds=1800,
+        sleeper=lambda _sec: None,
+    )
+
+    rounds = daemon.run(max_rounds=1)
+    assert rounds == 1
+    mock_service.sync_all.assert_called_once_with(catalog, cache)
+
+
+def test_orbit_daemon_stops_when_stop_event_set_before_run(tmp_path: Path) -> None:
+    """OrbitDaemon exits immediately when stop_event is already set."""
+    cache = OrbitCache(tmp_path / "modems.json")
+    mock_service = MagicMock(spec=OrbitService)
+    stop = threading.Event()
+    stop.set()
+
+    daemon = OrbitDaemon(
+        service=mock_service,
+        catalog_loader=list,
+        cache=cache,
+        interval_seconds=1800,
+        sleeper=lambda _sec: None,
+    )
+
+    rounds = daemon.run(stop_event=stop)
+    assert rounds == 0
+    mock_service.sync_all.assert_not_called()
+
+
+def test_orbit_daemon_sleep_is_interrupted_by_stop_event(tmp_path: Path) -> None:
+    """OrbitDaemon stops promptly after sleep interrupts via stop_event."""
+    cache = OrbitCache(tmp_path / "modems.json")
+    stop = threading.Event()
+    slept: list[int] = []
+
+    def sleeper(seconds: int) -> None:
+        slept.append(seconds)
+        stop.set()
+
+    mock_service = MagicMock(spec=OrbitService)
+    mock_service.sync_all.return_value = []
+
+    daemon = OrbitDaemon(
+        service=mock_service,
+        catalog_loader=list,
+        cache=cache,
+        interval_seconds=600,
+        sleeper=sleeper,
+    )
+
+    rounds = daemon.run(stop_event=stop, max_rounds=5)
+    assert rounds == 1
+    assert slept == [600]
+
+
+def test_orbit_daemon_survives_failing_round(tmp_path: Path) -> None:
+    """OrbitDaemon catches and logs exceptions from sync_all without crashing."""
+    cache = OrbitCache(tmp_path / "modems.json")
+    mock_service = MagicMock(spec=OrbitService)
+    mock_service.sync_all.side_effect = RuntimeError("Selenium driver crashed")
+
+    daemon = OrbitDaemon(
+        service=mock_service,
+        catalog_loader=list,
+        cache=cache,
+        interval_seconds=1800,
+        sleeper=lambda _sec: None,
+    )
+
+    rounds = daemon.run(max_rounds=1)
+    assert rounds == 1
+
+
+def test_build_orbit_daemon_from_settings() -> None:
+    """build_orbit_daemon_from_settings constructs a properly configured OrbitDaemon."""
+    daemon = build_orbit_daemon_from_settings()
+    assert isinstance(daemon, OrbitDaemon)
+    assert isinstance(daemon.service, OrbitService)
+    assert daemon.interval_seconds == 1800
+    assert callable(daemon.catalog_loader)
+    assert isinstance(daemon.cache, OrbitCache)
 

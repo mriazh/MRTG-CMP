@@ -17,6 +17,7 @@ from .config import settings
 from .db import Database
 from .logging_setup import configure_logging
 from .netcare.service import build_daemon_from_settings
+from .orbit.service import build_orbit_daemon_from_settings
 
 logger = logging.getLogger("mrtg_cmp.cli")
 
@@ -190,6 +191,32 @@ def cmd_orbit_sync(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_orbit(args: argparse.Namespace) -> int:
+    """Run the Telkomsel Orbit modem scraper daemon (24/7 background)."""
+    if not settings.orbit_enabled:
+        logger.error("Orbit scraper is disabled (ORBIT_ENABLED=false).")
+        return 1
+
+    daemon = build_orbit_daemon_from_settings(settings)
+    interval = getattr(args, "interval", None)
+    if interval is not None:
+        daemon.interval_seconds = max(1, interval)
+
+    logger.info(
+        "Starting Orbit scraper daemon (every %ds)...",
+        daemon.interval_seconds,
+    )
+
+    stop_event = threading.Event()
+    daemon.install_signal_handlers(stop_event)
+    try:
+        daemon.run(stop_event=stop_event, max_rounds=getattr(args, "iterations", None))
+    except KeyboardInterrupt:
+        logger.info("Orbit scraper interrupted by user; shutting down...")
+        stop_event.set()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build and return command-line argument parser."""
     parser = argparse.ArgumentParser(
@@ -259,6 +286,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-headless", action="store_true", help="Launch visible browser window"
     )
     p_orbit.set_defaults(func=cmd_orbit_sync)
+
+    # orbit
+    p_orbit_daemon = subparsers.add_parser(
+        "orbit", help="Run the Telkomsel Orbit modem scraper daemon (24/7 background)"
+    )
+    p_orbit_daemon.add_argument(
+        "--interval",
+        "-i",
+        type=int,
+        help="Seconds between scrape rounds (default: ORBIT_SYNC_INTERVAL_SECONDS)",
+    )
+    p_orbit_daemon.add_argument(
+        "--iterations", "-n", type=int, help="Maximum scrape rounds (for tests)"
+    )
+    p_orbit_daemon.set_defaults(func=cmd_orbit)
 
     return parser
 

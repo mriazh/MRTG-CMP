@@ -1,0 +1,24 @@
+[Unit]
+Description=MRTG-CMP Telkomsel Orbit Modem Scraper Daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@APP_USER@
+Group=@APP_USER@
+WorkingDirectory=@APP_DIR@
+EnvironmentFile=-@APP_DIR@/config/.env
+EnvironmentFile=-@APP_DIR@/.env
+Environment=MPLCONFIGDIR=/tmp/matplotlib
+ExecStart=@APP_DIR@/.venv/bin/python -m mrtg_cmp orbit
+Restart=always
+RestartSec=30s
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=@APP_DIR@/data @APP_DIR@/config @APP_DIR@
+
+[Install]
+WantedBy=multi-user.target

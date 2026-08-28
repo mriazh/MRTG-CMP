@@ -27,6 +27,7 @@ EXPECTED_UNITS = (
     "mrtg-cmp-web.service",
     "mrtg-cmp-collector.service",
     "mrtg-cmp-netcare.service",
+    "mrtg-cmp-orbit.service",
 )
 
 LEGACY_UNITS = (
@@ -198,6 +199,13 @@ def test_netcare_unit_supports_browser_automation() -> None:
     assert "PrivateTmp=" in text
 
 
+def test_orbit_unit_runs_the_orbit_command() -> None:
+    """The Orbit unit runs the background modem scraper daemon."""
+    assert _unit("mrtg-cmp-orbit.service").is_file()
+    text = _unit("mrtg-cmp-orbit.service").read_text(encoding="utf-8")
+    assert "ExecStart=@APP_DIR@/.venv/bin/python -m mrtg_cmp orbit" in text
+
+
 # --- deploy.sh -------------------------------------------------------------
 
 
@@ -219,6 +227,12 @@ def test_deploy_script_starts_every_new_unit() -> None:
     text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
     for unit in _unit_basenames():
         assert unit in text, f"deploy.sh does not handle new unit {unit}"
+
+
+def test_deploy_script_handles_orbit_unit() -> None:
+    """The deploy script includes and manages mrtg-cmp-orbit."""
+    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    assert "mrtg-cmp-orbit" in text
 
 
 def test_deploy_script_renders_app_dir_placeholder() -> None:

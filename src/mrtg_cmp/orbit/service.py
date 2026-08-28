@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import logging
+import signal
 import threading
-from typing import Any
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from mrtg_cmp.orbit.cache import OrbitCache
 from mrtg_cmp.orbit.scraper import OrbitModemStatus, OrbitScraper
 from mrtg_cmp.orbit.targets import OrbitModem
+
+if TYPE_CHECKING:
+    from mrtg_cmp.config import Settings
 
 logger = logging.getLogger("mrtg_cmp.orbit.service")
 
@@ -130,3 +135,115 @@ class OrbitService:
         thread = threading.Thread(target=_worker, name="OrbitSyncWorker", daemon=True)
         thread.start()
         return True
+
+
+def _wait(seconds: int) -> None:
+    """Interruptible sleep so SIGTERM/SIGINT is handled promptly."""
+    threading.Event().wait(seconds)
+
+
+def install_shutdown_handlers(stop_event: threading.Event) -> None:
+    """Ask the Orbit scrape loop to stop on SIGINT/SIGTERM."""
+
+    def _handler(_signum: int, _frame: Any) -> None:
+        logger.info("Orbit shutdown requested")
+        stop_event.set()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(sig, _handler)
+        except (ValueError, OSError, AttributeError):  # pragma: no cover - non-main thread
+            logger.debug("Could not install handler for %s", sig)
+
+
+class OrbitDaemon:
+    """Continuous scrape loop with graceful shutdown for Telkomsel Orbit modems."""
+
+    def __init__(
+        self,
+        service: OrbitService,
+        catalog_loader: Callable[[], list[OrbitModem]],
+        cache: OrbitCache,
+        interval_seconds: int = 1800,
+        sleeper: Callable[[int], None] | None = None,
+    ) -> None:
+        self.service = service
+        self.catalog_loader = catalog_loader
+        self.cache = cache
+        self.interval_seconds = max(1, interval_seconds)
+        self._sleeper = sleeper
+
+    def _sleep(self, seconds: int, stop_event: threading.Event | None = None) -> None:
+        if self._sleeper is not None:
+            self._sleeper(seconds)
+        elif stop_event is not None:
+            stop_event.wait(seconds)
+        else:
+            _wait(seconds)
+
+    def install_signal_handlers(self, stop_event: threading.Event) -> None:
+        """Ask the loop to stop on SIGINT/SIGTERM (best effort on non-POSIX)."""
+        install_shutdown_handlers(stop_event)
+
+    def run(
+        self,
+        stop_event: threading.Event | None = None,
+        max_rounds: int | None = None,
+    ) -> int:
+        """Run scrape rounds until stopped. Returns the number of completed rounds."""
+        stop = stop_event or threading.Event()
+        completed = 0
+        while not stop.is_set():
+            if max_rounds is not None and completed >= max_rounds:
+                break
+            try:
+                catalog = self.catalog_loader()
+                statuses = self.service.sync_all(catalog, self.cache)
+                completed += 1
+                ok = sum(1 for s in statuses if not s.error)
+                logger.info(
+                    "Orbit daemon round complete: %s/%s modems updated",
+                    ok,
+                    len(statuses),
+                )
+            except Exception as exc:
+                logger.error("Orbit daemon round failed: %s", exc)
+                completed += 1
+
+            if max_rounds is not None and completed >= max_rounds:
+                break
+            if stop.is_set():
+                break
+            self._sleep(self.interval_seconds, stop)
+
+        logger.info("Orbit daemon stopped after %s round(s)", completed)
+        return completed
+
+
+def build_orbit_daemon_from_settings(config: Settings | None = None) -> OrbitDaemon:
+    """Assemble a fully wired Orbit daemon from settings."""
+    from mrtg_cmp.config import settings as global_settings
+    from mrtg_cmp.orbit.targets import resolve_orbit_catalog
+
+    cfg = config or global_settings
+    service = OrbitService(headless=True)
+
+    def catalog_loader() -> list[OrbitModem]:
+        return resolve_orbit_catalog(cfg.orbit_catalog_file)
+
+    cache = OrbitCache(cfg.orbit_cache_dir / "modems.json")
+    return OrbitDaemon(
+        service=service,
+        catalog_loader=catalog_loader,
+        cache=cache,
+        interval_seconds=cfg.orbit_sync_interval_seconds,
+    )
+
+
+__all__ = [
+    "OrbitDaemon",
+    "OrbitService",
+    "build_orbit_daemon_from_settings",
+    "build_orbit_driver",
+    "install_shutdown_handlers",
+]
