@@ -11,6 +11,10 @@ __pycache__/
 .coverage.*
 htmlcov/
 
+# Matplotlib transient config/cache directories
+/matplotlib-*
+matplotlib-*
+
 # Virtual environments
 .venv/
 venv/

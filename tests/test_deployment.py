@@ -161,6 +161,18 @@ def test_web_unit_runs_the_web_command() -> None:
     assert "-m mrtg_cmp web" in text
 
 
+def test_web_unit_sets_matplotlib_config_dir() -> None:
+    """Under ProtectHome=read-only, Matplotlib needs a writable cache dir in /tmp."""
+    text = _unit("mrtg-cmp-web.service").read_text(encoding="utf-8")
+    assert "Environment=MPLCONFIGDIR=/tmp/matplotlib" in text
+
+
+def test_collector_unit_sets_matplotlib_config_dir() -> None:
+    """Collector imports mrtg_cmp which loads graph_renderer, requiring writable MPL cache."""
+    text = _unit("mrtg-cmp-collector.service").read_text(encoding="utf-8")
+    assert "Environment=MPLCONFIGDIR=/tmp/matplotlib" in text
+
+
 def test_netcare_unit_runs_the_netcare_command() -> None:
     """FR-14.1: the Netcare scraper has its own unit."""
     text = _unit("mrtg-cmp-netcare.service").read_text(encoding="utf-8")
@@ -233,6 +245,12 @@ def test_deploy_script_supports_config_env() -> None:
     text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
     assert "config/.env" in text
     assert "config/.env.example" in text
+
+
+def test_deploy_script_cleans_transient_matplotlib_dirs() -> None:
+    """deploy.sh must clean up stray matplotlib-* directories before start."""
+    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    assert 'rm -rf "$APP_DIR"/matplotlib-*' in text
 
 
 # --- Packaging -------------------------------------------------------------
@@ -558,3 +576,13 @@ def test_log_file_is_not_committed() -> None:
     """Runtime logs stay out of git; the file is regenerated on every start."""
     ignored = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
     assert any(line.strip() in {"*.log", "logs/"} for line in ignored)
+
+
+def test_matplotlib_cache_dirs_are_gitignored() -> None:
+    """Matplotlib fallback cache directories must stay untracked."""
+    ignored = {
+        line.strip()
+        for line in (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    }
+    assert "matplotlib-*" in ignored
+    assert "/matplotlib-*" in ignored

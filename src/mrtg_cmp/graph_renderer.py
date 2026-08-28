@@ -4,9 +4,17 @@ from __future__ import annotations
 
 import io
 import math
+import os
+import tempfile
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
+
+if "MPLCONFIGDIR" not in os.environ:
+    _mpl_cache = Path(tempfile.gettempdir()) / "matplotlib"
+    _mpl_cache.mkdir(parents=True, exist_ok=True)
+    os.environ["MPLCONFIGDIR"] = str(_mpl_cache)
 
 import matplotlib
 

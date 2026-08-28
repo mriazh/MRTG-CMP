@@ -89,6 +89,7 @@ for unit in "${LEGACY_UNITS[@]}"; do
         echo "   → $unit.service not installed, nothing to retire"
     fi
 done
+rm -rf "$APP_DIR"/matplotlib-*
 
 echo "📦 5/7 Installing mrtg-cmp-* systemd units..."
 sudo systemctl daemon-reload

@@ -377,3 +377,11 @@ def test_adaptive_time_locators_across_timespans(
     assert isinstance(ax.xaxis.get_major_locator(), expected_type)
     assert isinstance(ax.xaxis.get_minor_locator(), NullLocator)
     graph_renderer.plt.close("all")
+
+
+def test_mplconfigdir_is_configured() -> None:
+    """MPLCONFIGDIR must be set in os.environ by graph_renderer to prevent stray repo files."""
+    import os
+
+    assert "MPLCONFIGDIR" in os.environ
+    assert os.environ["MPLCONFIGDIR"]
