@@ -61,6 +61,7 @@ def test_login_success_and_session(client_with_db: TestClient) -> None:
     assert "Traffic WAN" in dash_resp.text
     assert "theme-toggle" in dash_resp.text
     assert "countdown-timer" in dash_resp.text
+    assert "btn-refresh-all" in dash_resp.text
 
 def test_api_telemetry_endpoint(client_with_db: TestClient) -> None:
     """GET /api/telemetry returns structured JSON metrics and recent samples."""
@@ -1912,3 +1913,26 @@ def test_progress_helpers_are_called_with_the_new_signatures() -> None:
         "openNetcareProgress();",
     ):
         assert call in template
+
+
+# ---------------------------------------------------------------------------
+# Phase 50: Dashboard Button Standardization & Orbit Action Consolidation
+# ---------------------------------------------------------------------------
+
+
+def test_dashboard_wan_controls_button_standardization(client_with_db: TestClient) -> None:
+    """Live WAN controls bar uses 'Refresh' button with id='btn-refresh-all'."""
+    login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
+    resp = client_with_db.get("/", cookies=login_resp.cookies)
+    assert resp.status_code == 200
+    assert 'id="btn-refresh-all"' in resp.text
+    # Live WAN is a single target, so button text is standardized to "Refresh"
+    assert ">Refresh</button>" in resp.text
+
+
+def test_dashboard_template_wan_refresh_button() -> None:
+    """The raw template markup for Live WAN uses 'Refresh' on #btn-refresh-all."""
+    template = _dashboard_template()
+    assert 'id="btn-refresh-all"' in template
+    assert '<button type="button" id="btn-refresh-all" class="btn btn-secondary"' in template
+    assert 'style="padding: 0.35rem 0.7rem; font-size: 0.78rem;">Refresh</button>' in template

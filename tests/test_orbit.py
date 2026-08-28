@@ -762,7 +762,8 @@ def test_orbit_dashboard_html_view(client_with_db: TestClient) -> None:
     assert "Active in Room (5)" in text
     assert "Idle / Spare (6)" in text
     assert "Decommissioned (1)" in text
-    assert "Sync Orbit Now" in text
+    assert "Refresh All" in text
+    assert "btn-sync-orbit" not in text
     assert "View Package Details" in text
     assert "orbit-countdown-timer" in text
     assert "btn-orbit-refresh-all" in text

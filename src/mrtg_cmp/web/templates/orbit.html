@@ -102,6 +102,15 @@
     opacity: 0.7;
 }
 
+.btn-sync.loading .sync-icon {
+    animation: orbit-spin 1s linear infinite;
+}
+
+@keyframes orbit-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
 /* KPI Summary Cards */
 .orbit-kpi-grid {
     display: grid;
@@ -606,10 +615,11 @@
                 <span class="status-dot up"></span>
                 Live poll: 180s &middot; Auto-refresh: <span id="orbit-countdown-timer">180</span>s
             </span>
-            <button type="button" id="btn-orbit-refresh-all" class="btn-secondary">Refresh All</button>
-            <button id="btn-sync-orbit" class="btn-sync" type="button" title="Sync Orbit modem data now">
-                <span id="sync-icon">🔄</span>
-                <span id="sync-text">Sync Orbit Now</span>
+            <button id="btn-orbit-refresh-all" class="btn-sync" type="button" title="Refresh and synchronize all Orbit modems">
+                <svg class="sync-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+                </svg>
+                Refresh All
             </button>
         </div>
     </div>
@@ -930,10 +940,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // 3. Sync Button
-    const syncBtn = document.getElementById('btn-sync-orbit');
-    const syncIcon = document.getElementById('sync-icon');
-    const syncText = document.getElementById('sync-text');
+    // 3. Consolidated Sync & Refresh Action
     const toast = document.getElementById('orbit-toast');
 
     function showToast(msg) {
@@ -945,35 +952,31 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 3500);
     }
 
-    if (syncBtn) {
-        syncBtn.addEventListener('click', async () => {
-            syncBtn.classList.add('loading');
-            syncIcon.textContent = '⏳';
-            syncText.textContent = 'Syncing...';
+    async function triggerOrbitSync() {
+        const btn = document.getElementById('btn-orbit-refresh-all');
+        if (btn) btn.classList.add('loading');
 
-            try {
-                const resp = await fetch('/api/orbit/sync', {
-                    method: 'POST',
-                    headers: { 'Accept': 'application/json' }
-                });
-                if (resp.ok) {
-                    showToast('✅ Orbit modem quota sync started successfully!');
-                    refreshOrbitModems();
-                } else {
-                    showToast('⚠️ Failed to sync Orbit modem quota');
-                }
-            } catch (err) {
-                console.error('Sync error', err);
-                showToast('❌ Network error during sync');
-            } finally {
-                setTimeout(() => {
-                    syncBtn.classList.remove('loading');
-                    syncIcon.textContent = '🔄';
-                    syncText.textContent = 'Sync Orbit Now';
-                }, 1200);
+        try {
+            const resp = await fetch('/api/orbit/sync', {
+                method: 'POST',
+                headers: { 'Accept': 'application/json' }
+            });
+            if (resp.ok) {
+                showToast('✅ Orbit modem quota sync started successfully!');
+                await refreshOrbitModems();
+            } else {
+                showToast('⚠️ Failed to sync Orbit modem quota');
             }
-        });
+        } catch (err) {
+            console.error('Sync error', err);
+            showToast('❌ Network error during sync');
+        } finally {
+            setTimeout(() => {
+                if (btn) btn.classList.remove('loading');
+            }, 1200);
+        }
     }
+    window.triggerOrbitSync = triggerOrbitSync;
 
     // 4. Auto-refresh & Countdown (Phase 40)
     const ORBIT_POLL_SECONDS = 180;
@@ -1153,7 +1156,7 @@ document.addEventListener('DOMContentLoaded', () => {
         refreshAllBtn.addEventListener('click', () => {
             orbitSecondsLeft = ORBIT_POLL_SECONDS;
             if (countdownEl) countdownEl.textContent = orbitSecondsLeft;
-            refreshOrbitModems();
+            triggerOrbitSync();
         });
     }
 
