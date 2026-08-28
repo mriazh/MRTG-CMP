@@ -20,11 +20,15 @@ TEMPLATES_DIR = Path(__file__).resolve().parents[1] / "src" / "mrtg_cmp" / "web"
 
 
 def test_login_page_renders(client_with_db: TestClient) -> None:
-    """GET /login returns 200 with the HTML login form."""
+    """GET /login returns 200 with the HTML login form and no nav tabs."""
     resp = client_with_db.get("/login")
     assert resp.status_code == 200
     assert "Authentication" in resp.text
+    assert "Network Infrastructure" in resp.text
     assert "username" in resp.text
+    assert '<nav class="nav-tabs"' not in resp.text
+    assert 'href="/orbit"' not in resp.text
+    assert 'href="/console"' not in resp.text
 
 def test_dashboard_unauthenticated_redirects(client_with_db: TestClient) -> None:
     """Unauthenticated browser request to / redirects to /login."""
@@ -779,13 +783,49 @@ def test_dashboard_uses_three_minute_refresh(client_with_db: TestClient) -> None
     assert "default(180)" in (TEMPLATES_DIR / "dashboard.html").read_text(encoding="utf-8")
 
 def test_navbar_links_cover_mrtg_orbit_and_console(client_with_db: TestClient) -> None:
-    """FR-13.4: navigation exposes MRTG Monitoring, Telkomsel Orbit, and Web Console."""
+    """FR-13.4: navigation exposes clean MRTG Monitoring, Telkomsel Orbit, and Web Console tabs.
+
+    Verifies navigation hygiene:
+    - nav-tabs is rendered with clean labels (no raw emojis)
+    - redundant Dashboard and Console action buttons are removed from nav-actions
+    - unauthenticated views (e.g. /login) do not render nav-tabs
+    """
+    # 1. Unauthenticated GET /login has no nav-tabs
+    login_page = client_with_db.get("/login")
+    assert '<nav class="nav-tabs"' not in login_page.text
+    assert 'href="/orbit"' not in login_page.text
+    assert 'href="/console"' not in login_page.text
+
+    # 2. Authenticated GET / has clean nav-tabs and no redundant buttons
     login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
     resp = client_with_db.get("/", cookies=login_resp.cookies)
 
+    assert resp.status_code == 200
+    assert '<nav class="nav-tabs"' in resp.text
     assert 'href="/"' in resp.text
     assert 'href="/orbit"' in resp.text
     assert 'href="/console"' in resp.text
+
+    # Clean text without cheesy emojis in nav-tabs
+    assert "MRTG Monitoring" in resp.text
+    assert "Telkomsel Orbit" in resp.text
+    assert "Web Console" in resp.text
+    assert "📊 MRTG Monitoring" not in resp.text
+    assert "📡 Telkomsel Orbit" not in resp.text
+    assert "💻 Web Console" not in resp.text
+
+    # Redundant action buttons must NOT be present
+    assert "📊 Dashboard" not in resp.text
+    assert "💻 Console" not in resp.text
+
+    # Extract .nav-actions block to verify only theme-toggle, user-info, and logout remain
+    nav_actions_match = re.search(r'<div class="nav-actions">(.*?)</div>', resp.text, re.DOTALL)
+    assert nav_actions_match, "nav-actions block not found"
+    nav_actions_html = nav_actions_match.group(1)
+    assert 'href="/"' not in nav_actions_html
+    assert 'href="/console"' not in nav_actions_html
+    assert 'id="theme-toggle"' in nav_actions_html
+    assert 'href="/logout"' in nav_actions_html
 
 def test_console_page_and_endpoints(client_with_db: TestClient) -> None:
     """GET /console renders terminal UI and API endpoints enforce auth and validation."""
