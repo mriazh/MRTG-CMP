@@ -10,9 +10,10 @@ import logging
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
-from mrtg_cmp.orbit.targets import OrbitModem
+from mrtg_cmp.orbit.targets import OrbitModem, update_catalog_modem_ssid
 
 logger = logging.getLogger("mrtg_cmp.orbit.scraper")
 
@@ -319,12 +320,13 @@ def parse_package_cards_html(html: str, now: datetime | None = None) -> list[Orb
 def extract_modem_info(
     html_or_driver: Any,
     target: OrbitModem | None = None,
+    config_dir: Path | str | None = None,
 ) -> dict[str, Any]:
     """Extract live modem info such as wifi_name (SSID) from MyOrbit portal HTML or driver.
 
     When wifi_name is extracted and target is provided, updates target.ssid
     with the live carrier SSID so any typos in Excel or CSV catalogs are
-    corrected in the cached status manifest.
+    corrected in the cached status manifest and catalog files on disk.
     """
     if hasattr(html_or_driver, "page_source"):
         html = str(html_or_driver.page_source or "")
@@ -366,7 +368,13 @@ def extract_modem_info(
     if wifi_name:
         info["wifi_name"] = wifi_name
         if target is not None:
-            target.ssid = wifi_name
+            if target.ssid != wifi_name:
+                target.ssid = wifi_name
+                phone_or_imei = target.phone or target.imei
+                if phone_or_imei:
+                    update_catalog_modem_ssid(phone_or_imei, wifi_name, config_dir=config_dir)
+            else:
+                target.ssid = wifi_name
 
     return info
 

@@ -26,7 +26,6 @@ ENV/
 .env.*
 config/.env
 config/.env.*
-!.env.example
 !config/.env.example
 
 # Runtime databases and operational data

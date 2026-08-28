@@ -44,21 +44,13 @@ echo "⚙️ Checking environment configuration (config/.env)..."
 CONFIG_DIR="$APP_DIR/config"
 CONFIG_ENV="$CONFIG_DIR/.env"
 CONFIG_ENV_EXAMPLE="$CONFIG_DIR/.env.example"
-ROOT_ENV="$APP_DIR/.env"
-ROOT_ENV_EXAMPLE="$APP_DIR/.env.example"
 mkdir -p "$CONFIG_DIR"
+rm -f "$APP_DIR/.env" "$APP_DIR/.env.example"
 if [ -f "$CONFIG_ENV" ]; then
     echo "   → using existing config/.env"
-elif [ -f "$ROOT_ENV" ]; then
-    cp "$ROOT_ENV" "$CONFIG_ENV"
-    echo "   → migrated .env to config/.env"
 elif [ -f "$CONFIG_ENV_EXAMPLE" ]; then
     cp "$CONFIG_ENV_EXAMPLE" "$CONFIG_ENV"
     echo "   → seeded config/.env from config/.env.example"
-    echo "   ⚠️  configure your secrets in config/.env before starting services"
-elif [ -f "$ROOT_ENV_EXAMPLE" ]; then
-    cp "$ROOT_ENV_EXAMPLE" "$CONFIG_ENV"
-    echo "   → seeded config/.env from .env.example"
     echo "   ⚠️  configure your secrets in config/.env before starting services"
 fi
 

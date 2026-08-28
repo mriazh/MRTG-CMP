@@ -25,6 +25,7 @@ from mrtg_cmp.orbit.targets import (
     load_orbit_catalog_csv,
     load_orbit_catalog_excel,
     resolve_orbit_catalog,
+    update_catalog_modem_ssid,
 )
 
 
@@ -401,3 +402,96 @@ def test_extract_modem_info_updates_target_ssid() -> None:
     info = extract_modem_info(html, target=target)
     assert info["wifi_name"] == "Orbit_Star_Live_SSID"
     assert target.ssid == "Orbit_Star_Live_SSID"
+
+
+def test_update_catalog_modem_ssid_csv(tmp_path: Path) -> None:
+    """SSID updates are written back to orbit_targets.csv on disk."""
+    csv_file = tmp_path / "orbit_targets.csv"
+    csv_content = """no,imei,phone,location,ssid,status
+1,1700000001,081200000001,Meeting Room 1,Old_SSID_1,ACTIVE
+2,860000000000002,081200000002,IDLE,Old_SSID_2,IDLE
+"""
+    csv_file.write_text(csv_content, encoding="utf-8")
+
+    # Update by phone
+    res1 = update_catalog_modem_ssid("081200000001", "Updated_SSID_1", config_dir=tmp_path)
+    assert res1 is True
+
+    # Update by IMEI
+    res2 = update_catalog_modem_ssid("860000000000002", "Updated_SSID_2", config_dir=tmp_path)
+    assert res2 is True
+
+    # No match
+    res3 = update_catalog_modem_ssid("089999999999", "Unknown_SSID", config_dir=tmp_path)
+    assert res3 is False
+
+    # Check updated content
+    updated_modems = load_orbit_catalog_csv(csv_file)
+    assert len(updated_modems) == 2
+    assert updated_modems[0].ssid == "Updated_SSID_1"
+    assert updated_modems[1].ssid == "Updated_SSID_2"
+
+
+def test_update_catalog_modem_ssid_excel(tmp_path: Path) -> None:
+    """SSID updates are written back to orbit excel workbook on disk."""
+    import openpyxl
+
+    excel_file = tmp_path / f"orbit_{''.join(('gm', 'f'))}.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.append(["No.", "IMEI", "No. Telepon", "Lokasi Modem", "SSID Modem", "Status"])
+    ws.append([1, "1700000001", "081200000001", "Room Alpha", "Old_SSID_A", "ACTIVE"])
+    ws.append([2, "860000000000002", "081200000002", "Room Bravo", "Old_SSID_B", "IDLE"])
+    wb.save(str(excel_file))
+
+    # Update by phone
+    res1 = update_catalog_modem_ssid("081200000001", "Live_SSID_Alpha", config_dir=tmp_path)
+    assert res1 is True
+
+    # Update by IMEI
+    res2 = update_catalog_modem_ssid("860000000000002", "Live_SSID_Bravo", config_dir=tmp_path)
+    assert res2 is True
+
+    # Verify workbook persisted changes
+    loaded_wb = openpyxl.load_workbook(str(excel_file))
+    loaded_ws = loaded_wb.active
+    assert loaded_ws is not None
+    rows = list(loaded_ws.iter_rows(values_only=True))
+    assert rows[1][4] == "Live_SSID_Alpha"
+    assert rows[2][4] == "Live_SSID_Bravo"
+
+
+def test_extract_modem_info_persists_to_catalog(tmp_path: Path) -> None:
+    """extract_modem_info persists changed SSID to catalog on disk."""
+    csv_file = tmp_path / "orbit_targets.csv"
+    csv_content = (
+        "no,imei,phone,location,ssid,status\n"
+        "1,860000000000001,081200000001,Room 101,Typo_SSID,ACTIVE\n"
+    )
+    csv_file.write_text(csv_content, encoding="utf-8")
+
+    target = OrbitModem(1, "860000000000001", "081200000001", "Room 101", "Typo_SSID")
+    html = """
+    <div class="modem-info">
+        <span class="wifi-label">Nama WiFi:</span>
+        <span class="wifi-name">Orbit_Star_New_SSID</span>
+    </div>
+    """
+    info = extract_modem_info(html, target=target, config_dir=tmp_path)
+    assert info["wifi_name"] == "Orbit_Star_New_SSID"
+    assert target.ssid == "Orbit_Star_New_SSID"
+
+    # Verify CSV was updated
+    modems = load_orbit_catalog_csv(csv_file)
+    assert len(modems) == 1
+    assert modems[0].ssid == "Orbit_Star_New_SSID"
+
+
+def test_update_catalog_modem_ssid_empty_and_missing() -> None:
+    """Empty parameters or missing config dir return False safely."""
+    assert update_catalog_modem_ssid("", "") is False
+    assert update_catalog_modem_ssid("0812345", "") is False
+    assert update_catalog_modem_ssid("", "SSID") is False
+    missing_dir = Path("non_existent_dir_12345")
+    assert update_catalog_modem_ssid("0812345", "SSID", config_dir=missing_dir) is False

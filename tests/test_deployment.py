@@ -241,10 +241,11 @@ def test_deploy_script_installs_units_from_systemd_dir() -> None:
 
 
 def test_deploy_script_supports_config_env() -> None:
-    """deploy.sh checks and seeds config/.env from .env or config/.env.example."""
+    """deploy.sh checks and seeds config/.env and purges legacy root env files."""
     text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
     assert "config/.env" in text
     assert "config/.env.example" in text
+    assert 'rm -f "$APP_DIR/.env" "$APP_DIR/.env.example"' in text
 
 
 def test_deploy_script_cleans_transient_matplotlib_dirs() -> None:
@@ -280,8 +281,8 @@ def test_netcare_package_is_included_in_the_distribution() -> None:
 
 
 def test_env_example_documents_the_netcare_settings() -> None:
-    """Operators need the Netcare variables documented in .env.example."""
-    text = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+    """Operators need the Netcare variables documented in config/.env.example."""
+    text = EXAMPLE_CONFIG_ENV.read_text(encoding="utf-8")
     for key in (
         "NETCARE_ENABLED",
         "NETCARE_BASE_URL",
@@ -294,14 +295,14 @@ def test_env_example_documents_the_netcare_settings() -> None:
         "TOTP_SECRET",
         "DASHBOARD_REFRESH_SECONDS",
     ):
-        assert re.search(rf"^{key}=", text, re.MULTILINE), f"missing {key} in .env.example"
+        assert re.search(rf"^{key}=", text, re.MULTILINE), f"missing {key} in config/.env.example"
 
 
 def test_env_example_documents_the_logging_settings() -> None:
     """FR-16.1: the operator has to be able to find and change the log path."""
-    text = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+    text = EXAMPLE_CONFIG_ENV.read_text(encoding="utf-8")
     for key in ("LOG_FILE", "LOG_LEVEL"):
-        assert re.search(rf"^{key}=", text, re.MULTILINE), f"missing {key} in .env.example"
+        assert re.search(rf"^{key}=", text, re.MULTILINE), f"missing {key} in config/.env.example"
 
 
 def test_env_example_ships_only_valid_gemini_models() -> None:
@@ -309,14 +310,14 @@ def test_env_example_ships_only_valid_gemini_models() -> None:
 
     from mrtg_cmp.netcare.captcha import VALID_GEMINI_VISION_MODELS
 
-    text = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+    text = EXAMPLE_CONFIG_ENV.read_text(encoding="utf-8")
     match = re.search(r'^GEMINI_MODELS="([^"]*)"', text, re.MULTILINE)
-    assert match, "GEMINI_MODELS must be documented in .env.example"
+    assert match, "GEMINI_MODELS must be documented in config/.env.example"
     configured = [item.strip() for item in match.group(1).split(",") if item.strip()]
 
     assert configured
     unknown = [model for model in configured if model not in VALID_GEMINI_VISION_MODELS]
-    assert not unknown, f".env.example ships unknown Gemini models: {unknown}"
+    assert not unknown, f"config/.env.example ships unknown Gemini models: {unknown}"
 
 
 def test_env_example_orders_gemini_models_by_quota_high_first() -> None:
@@ -329,13 +330,13 @@ def test_env_example_orders_gemini_models_by_quota_high_first() -> None:
     high_quota = ("gemini-3.5-flash-lite", "gemini-3.1-flash-lite")
     metered = ("gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash")
 
-    text = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+    text = EXAMPLE_CONFIG_ENV.read_text(encoding="utf-8")
     match = re.search(r'^GEMINI_MODELS="([^"]*)"', text, re.MULTILINE)
-    assert match, "GEMINI_MODELS must be documented in .env.example"
+    assert match, "GEMINI_MODELS must be documented in config/.env.example"
     configured = [item.strip() for item in match.group(1).split(",") if item.strip()]
 
     for model in (*high_quota, *metered):
-        assert model in configured, f".env.example must offer {model}"
+        assert model in configured, f"config/.env.example must offer {model}"
     assert configured.index(metered[0]) > max(configured.index(m) for m in high_quota)
 
 
@@ -347,9 +348,7 @@ def test_shipped_env_orders_gemini_models_by_quota_high_first() -> None:
 
     env_file = REPO_ROOT / "config" / ".env"
     if not env_file.exists():
-        env_file = REPO_ROOT / ".env"
-    if not env_file.exists():  # a fresh clone ships the example only
-        pytest.skip(".env or config/.env is not present in this checkout")
+        pytest.skip("config/.env is not present in this checkout")
 
     text = env_file.read_text(encoding="utf-8")
     match = re.search(r'^GEMINI_MODELS="([^"]*)"', text, re.MULTILINE)
@@ -370,25 +369,10 @@ def _env_site_name(path: Path) -> str:
 # --- OpSec sanitization gate (Task 32) ---------------------------------------
 
 
-def test_env_example_brands_the_site_neutrally() -> None:
-    """The shipped example is public, so it must not name a single customer site."""
-
-    assert _env_site_name(REPO_ROOT / ".env.example") == "Enterprise Gateway"
-
-
 def test_config_env_example_brands_the_site_neutrally() -> None:
     """The config/.env.example template must brand the site neutrally."""
 
     assert _env_site_name(EXAMPLE_CONFIG_ENV) == "Enterprise Gateway"
-
-
-def test_config_env_example_matches_root_example() -> None:
-    """config/.env.example must match the root .env.example template exactly."""
-
-    assert EXAMPLE_CONFIG_ENV.is_file()
-    assert EXAMPLE_CONFIG_ENV.read_text(encoding="utf-8") == (REPO_ROOT / ".env.example").read_text(
-        encoding="utf-8"
-    )
 
 
 def test_config_env_example_obeys_opsec_rules() -> None:
@@ -410,12 +394,13 @@ def test_config_env_is_gitignored() -> None:
     assert "config/.env" in ignored
     assert "config/.env.*" in ignored
     assert "!config/.env.example" in ignored
+    assert "!.env.example" not in ignored
 
 
 def test_env_example_ships_no_secret_values() -> None:
     """Every credential in the public example has to be empty, not illustrative."""
 
-    text = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+    text = EXAMPLE_CONFIG_ENV.read_text(encoding="utf-8")
     for key in (
         "ROUTEROS_PASSWORD",
         "ADMIN_PASSWORD",
@@ -450,9 +435,7 @@ def test_shipped_env_sets_its_own_site_name() -> None:
 
     env_file = REPO_ROOT / "config" / ".env"
     if not env_file.exists():
-        env_file = REPO_ROOT / ".env"
-    if not env_file.exists():  # a fresh clone ships the example only
-        pytest.skip(".env or config/.env is not present in this checkout")
+        pytest.skip("config/.env is not present in this checkout")
 
     assert _env_site_name(env_file).strip()
 
