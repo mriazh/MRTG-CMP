@@ -1300,6 +1300,19 @@ toggle there collapses the map without the operator losing scroll position. #}
     <h2>TelkomCare Netcare &middot; Branch Links ({{ netcare_total }})</h2>
 </div>
 
+<!-- NOC Summary Strip -->
+<div class="noc-summary-strip" style="display: flex; align-items: center; gap: 1rem; margin: 1rem 0; padding: 0.75rem 1rem; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 4px; font-size: 0.9rem; font-variant-numeric: tabular-nums; font-family: monospace;">
+    <span style="display: inline-flex; align-items: center; gap: 0.35rem;">
+        <span style="color: var(--success); font-weight: 700;">🟢 {{ netcare_status_summary.fresh }} Fresh</span>
+    </span>
+    <span style="display: inline-flex; align-items: center; gap: 0.35rem;">
+        <span style="color: #FBBF24; font-weight: 700;">🟡 {{ netcare_status_summary.stale }} Stale</span>
+    </span>
+    <span style="display: inline-flex; align-items: center; gap: 0.35rem;">
+        <span style="color: var(--danger); font-weight: 700;">🔴 {{ netcare_status_summary.down }} Down</span>
+    </span>
+</div>
+
 <div class="card">
     <div class="card-header">
         <h2>TelkomCare Netcare</h2>
@@ -2337,7 +2350,20 @@ document.addEventListener('DOMContentLoaded', () => {
             }[key];
             if (!rank) return;
 
+            // Auto-promote problematic cards ('down', 'error', 'stale') to top
+            // unless another sort is explicitly chosen (name, speed, service)
+            const problematicStatuses = ['down', 'error', 'stale'];
             const sorted = netcareCards.slice().sort((a, b) => {
+                const aIsProblematic = problematicStatuses.includes(a.dataset.status);
+                const bIsProblematic = problematicStatuses.includes(b.dataset.status);
+                
+                // If auto-promoting (status sort or default), prioritize problematic cards
+                if (key === 'status' || key === null || key === 'undefined') {
+                    if (aIsProblematic && !bIsProblematic) return -1;
+                    if (!aIsProblematic && bIsProblematic) return 1;
+                }
+                
+                // Otherwise, use the selected sort
                 const left = rank(a);
                 const right = rank(b);
                 const result = (typeof left === 'string' || typeof right === 'string')

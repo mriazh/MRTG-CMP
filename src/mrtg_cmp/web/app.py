@@ -325,6 +325,12 @@ def _netcare_context(day: str | None = None) -> dict[str, Any]:
         for code, count in service_totals.items()
     ]
 
+    # Calculate status summary counts
+    fresh = sum(1 for c in cards if c.get('status') == 'ok')
+    stale = sum(1 for c in cards if c.get('status') in ('stale', 'pending'))
+    down = sum(1 for c in cards if c.get('status') in ('error', 'down'))
+    netcare_status_summary = {'fresh': fresh, 'stale': stale, 'down': down}
+
     return {
         # Public API shape consumed by the dashboard JavaScript.
         "targets": cards,
@@ -346,6 +352,7 @@ def _netcare_context(day: str | None = None) -> dict[str, Any]:
         "netcare_day": day or "",
         "netcare_partitions": cache.list_partitions(),
         "netcare_estimated_seconds": estimate_seconds(len(cards), settings.netcare_workers),
+        "netcare_status_summary": netcare_status_summary,
     }
 
 
