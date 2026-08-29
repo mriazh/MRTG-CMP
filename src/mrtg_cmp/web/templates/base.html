@@ -296,7 +296,9 @@
         <nav class="nav-tabs" aria-label="Main navigation">
             <a href="/" class="nav-tab {% block nav_mrtg %}active{% endblock %}">Dashboard MRTG</a>
             <a href="/orbit" class="nav-tab {% block nav_orbit %}{% endblock %}">Orbit</a>
+            {% if current_user.role != 'viewer' %}
             <a href="/console" class="nav-tab {% block nav_console %}{% endblock %}">Console</a>
+            {% endif %}
             <a href="/logs" class="nav-tab {% block nav_logs %}{% endblock %}">Logs</a>
         </nav>
         {% endif %}

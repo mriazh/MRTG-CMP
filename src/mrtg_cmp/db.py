@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -113,11 +114,13 @@ class Database:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     username TEXT NOT NULL COLLATE NOCASE UNIQUE,
                     password_hash TEXT NOT NULL,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'admin'
                 );
 
                 CREATE TABLE IF NOT EXISTS sessions (
                     token TEXT PRIMARY KEY,
+                    token_hash TEXT UNIQUE,
                     user_id INTEGER NOT NULL,
                     username TEXT NOT NULL,
                     expires_at INTEGER NOT NULL,
@@ -283,6 +286,7 @@ class Database:
         username: str,
         password_hash: str,
         created_at: str | datetime | None = None,
+        role: str = 'admin',
     ) -> int:
         """Create a user and return its primary key."""
 
@@ -300,10 +304,10 @@ class Database:
         with self.connection() as connection, connection:
             cursor = connection.execute(
                 """
-                INSERT INTO users (username, password_hash, created_at)
-                VALUES (?, ?, ?)
+                INSERT INTO users (username, password_hash, created_at, role)
+                VALUES (?, ?, ?, ?)
                 """,
-                (username.strip(), password_hash, created_at_value),
+                (username.strip(), password_hash, created_at_value, role),
             )
             lastrowid = cursor.lastrowid
             if lastrowid is None:
@@ -322,6 +326,22 @@ class Database:
         with self.connection() as connection:
             row = connection.execute("SELECT * FROM users WHERE id = ?", (int(user_id),)).fetchone()
             return self._row_to_dict(row)
+
+    def get_user_role(self, username: str) -> str | None:
+        """Get user's role by username."""
+        user = self.get_user(username)
+        if user is None:
+            return None
+        return user.get("role")
+
+    def update_user_role(self, username: str, role: str) -> bool:
+        """Update user's role and return True if successful."""
+        with self.connection() as connection, connection:
+            cursor = connection.execute(
+                "UPDATE users SET role = ? WHERE username = ?",
+                (role, username),
+            )
+            return bool(cursor.rowcount > 0)
 
     def create_session(
         self,
@@ -349,15 +369,19 @@ class Database:
             raise ValueError(f"unknown user_id: {user_id}")
         session_username = username or str(user["username"])
 
+        # Hash the token before storing in database
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+
         with self.connection() as connection, connection:
             connection.execute(
                 """
                 INSERT INTO sessions (
-                    token, user_id, username, expires_at, remember_me
-                ) VALUES (?, ?, ?, ?, ?)
+                    token, token_hash, user_id, username, expires_at, remember_me
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     token,
+                    token_hash,
                     int(user_id),
                     session_username,
                     int(expires_at),
@@ -367,13 +391,39 @@ class Database:
         return token
 
     def get_session(self, token: str) -> dict[str, Any] | None:
+        # First, try to find session by token_hash (new format)
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
         with self.connection() as connection:
+            # Try token_hash first (new format)
+            row = connection.execute(
+                "SELECT * FROM sessions WHERE token_hash = ?", (token_hash,),
+            ).fetchone()
+            if row:
+                return self._row_to_dict(row)
+            
+            # If not found, try token (old format for backward compatibility)
             row = connection.execute("SELECT * FROM sessions WHERE token = ?", (token,)).fetchone()
-            return self._row_to_dict(row)
+            if row:
+                # Migrate old session to new format
+                token_hash = hashlib.sha256(token.encode()).hexdigest()
+                connection.execute(
+                    "UPDATE sessions SET token_hash = ? WHERE token = ?",
+                    (token_hash, token)
+                )
+                return self._row_to_dict(row)
+            
+            return None
 
     def delete_session(self, token: str) -> bool:
         """Revoke one session by token."""
+        # First, try to delete by token_hash (new format)
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
         with self.connection() as connection, connection:
+            cursor = connection.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
+            if cursor.rowcount > 0:
+                return True
+            
+            # If not found, try token (old format for backward compatibility)
             cursor = connection.execute("DELETE FROM sessions WHERE token = ?", (token,))
             return bool(cursor.rowcount > 0)
 

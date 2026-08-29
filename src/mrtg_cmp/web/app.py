@@ -28,8 +28,10 @@ from ..auth import (
     ensure_admin_user,
     get_current_user_optional,
     get_db,
+    require_admin,
     require_authenticated_user,
     revoke_session,
+    validate_redirect_url,
     verify_password,
 )
 from ..config import settings
@@ -380,6 +382,9 @@ def login_page(
     current_user: dict[str, Any] | None = Depends(get_current_user_optional),
 ) -> Any:
     """Render login form or redirect to dashboard if already authenticated."""
+    # Validate redirect URL to prevent open redirects (CWE-601)
+    next = validate_redirect_url(next)
+    
     if current_user is not None:
         return RedirectResponse(url=next, status_code=status.HTTP_303_SEE_OTHER)
     return templates.TemplateResponse(
@@ -407,6 +412,9 @@ def process_login(
     db: Database = Depends(get_db),
 ) -> Any:
     """Validate credentials, issue session cookie, and redirect."""
+    # Validate redirect URL to prevent open redirects (CWE-601)
+    next = validate_redirect_url(next)
+    
     user = db.get_user(username.strip())
     if not user or not verify_password(password, user["password_hash"]):
         return templates.TemplateResponse(
@@ -681,7 +689,7 @@ def orbit_view(
 
 @app.get("/api/orbit/modems")
 def api_orbit_modems(
-    current_user: dict[str, Any] = Depends(require_authenticated_user),
+    current_user: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     """Return every Orbit modem with quota status, multi-package breakdown, and expiry info."""
     ctx = _orbit_context()
@@ -694,14 +702,14 @@ def api_orbit_modems(
 
 @app.get("/api/orbit/sync/status")
 def api_orbit_sync_status(
-    current_user: dict[str, Any] = Depends(require_authenticated_user),
+    current_user: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, str | None]:
     return _orbit_service().sync_status
 
 
 @app.post("/api/orbit/sync")
 async def api_orbit_sync(
-    current_user: dict[str, Any] = Depends(require_authenticated_user),
+    current_user: dict[str, Any] = Depends(require_admin),
 ) -> Response:
     """Trigger on-demand live sync for Orbit modems."""
     catalog = resolve_orbit_catalog(settings.orbit_catalog_file)
@@ -785,7 +793,7 @@ def _persist_orbit_change(catalog: list[OrbitModem]) -> None:
 @app.post("/api/orbit/modem")
 def api_create_orbit_modem(
     payload: OrbitModemRequest,
-    current_user: dict[str, Any] = Depends(require_authenticated_user),
+    current_user: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     """Create a new Orbit modem target in the catalog."""
     modem = _orbit_catalog_from_request(payload)
@@ -806,7 +814,7 @@ def api_create_orbit_modem(
 def api_update_orbit_modem(
     no: int,
     payload: OrbitModemRequest,
-    current_user: dict[str, Any] = Depends(require_authenticated_user),
+    current_user: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     """Update an existing Orbit modem target."""
     modem = _orbit_catalog_from_request(payload)
@@ -831,7 +839,7 @@ def api_update_orbit_modem(
 @app.delete("/api/orbit/modem/{no}")
 def api_delete_orbit_modem(
     no: int,
-    current_user: dict[str, Any] = Depends(require_authenticated_user),
+    current_user: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     """Delete an Orbit modem target."""
     catalog = resolve_orbit_catalog(settings.orbit_catalog_file)
@@ -863,7 +871,7 @@ class NetcareTargetRequest(BaseModel):
 @app.get("/api/netcare/targets")
 def api_netcare_targets(
     day: str | None = Query(None),
-    current_user: dict[str, Any] = Depends(require_authenticated_user),
+    current_user: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     """Return every Netcare branch target with status, timestamp, and image URL."""
     return _netcare_context(day)
@@ -872,7 +880,7 @@ def api_netcare_targets(
 @app.post("/api/netcare/targets")
 def api_create_netcare_target(
     payload: NetcareTargetRequest,
-    current_user: dict[str, Any] = Depends(require_authenticated_user),
+    current_user: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     """Create a new Netcare branch target in the catalog."""
     service = _netcare_service()
@@ -915,7 +923,7 @@ def api_create_netcare_target(
 def api_update_netcare_target(
     target_id: str,
     payload: NetcareTargetRequest,
-    current_user: dict[str, Any] = Depends(require_authenticated_user),
+    current_user: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     """Update an existing Netcare branch target."""
     service = _netcare_service()
@@ -963,7 +971,7 @@ def api_update_netcare_target(
 @app.delete("/api/netcare/targets/{target_id}")
 def api_delete_netcare_target(
     target_id: str,
-    current_user: dict[str, Any] = Depends(require_authenticated_user),
+    current_user: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, str]:
     """Delete a Netcare branch target."""
     service = _netcare_service()
@@ -981,7 +989,7 @@ def api_delete_netcare_target(
 @app.post("/api/netcare/query")
 async def api_netcare_query(
     request: Request,
-    current_user: dict[str, Any] = Depends(require_authenticated_user),
+    current_user: dict[str, Any] = Depends(require_admin),
 ) -> Response:
     """Start an on-demand Netcare capture for a time range and return its job id.
 
@@ -1034,7 +1042,7 @@ async def api_netcare_query(
 @app.get("/api/netcare/status")
 def api_netcare_status(
     job_id: str = Query(...),
-    current_user: dict[str, Any] = Depends(require_authenticated_user),
+    current_user: dict[str, Any] = Depends(require_admin),
 ) -> Response:
     """Return live progress for a Netcare query so the dialog can count down (FR-15.3)."""
 
@@ -1055,7 +1063,7 @@ def api_netcare_status(
 @app.post("/api/netcare/cancel")
 def api_netcare_cancel(
     job_id: str = Query(...),
-    current_user: dict[str, Any] = Depends(require_authenticated_user),
+    current_user: dict[str, Any] = Depends(require_admin),
 ) -> Response:
     """Abandon a running Netcare query so the operator is not held hostage.
 

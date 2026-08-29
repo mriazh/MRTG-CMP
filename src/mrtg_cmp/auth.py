@@ -83,7 +83,7 @@ def ensure_admin_user(
 
     initial_password = admin_password or "admin123"
     hashed = hash_password(initial_password)
-    user_id = db.create_user(username=admin_username, password_hash=hashed)
+    user_id = db.create_user(username=admin_username, password_hash=hashed, role='admin')
     user = db.get_user_by_id(user_id)
     if user is None:
         raise RuntimeError(f"Failed to retrieve newly created user id {user_id}")
@@ -176,3 +176,109 @@ def require_authenticated_user(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Authentication required",
     )
+
+
+def require_admin(
+    request: Request,
+    current_user: dict[str, Any] | None = Depends(get_current_user_optional),
+) -> dict[str, Any]:
+    """Require an authenticated admin user.
+    
+    Rejects 'viewer' or unauthenticated users with HTTP 403 Forbidden.
+    Raises HTTP 401 or redirects to login for unauthenticated requests.
+    """
+    if current_user is None:
+        accept = request.headers.get("accept", "").lower()
+        if "text/html" in accept:
+            # Redirect browser navigation to the login page
+            next_path = request.url.path
+            if request.url.query:
+                next_path = f"{next_path}?{request.url.query}"
+            raise HTTPException(
+                status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+                headers={"Location": f"/login?next={next_path}"},
+            )
+        
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+        )
+    
+    if current_user.get("role") != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: admin privileges required",
+        )
+    
+    return current_user
+
+
+def change_password_and_revoke_sessions(
+    db: Database,
+    username: str,
+    old_password: str,
+    new_password: str,
+) -> bool:
+    """Change user password and revoke all active sessions for that user.
+    
+    Returns True if successful, False if old password is incorrect.
+    """
+    user = db.get_user(username)
+    if not user or not verify_password(old_password, user["password_hash"]):
+        return False
+    
+    # Generate new password hash
+    new_hashed_password = hash_password(new_password)
+    
+    # Update user password
+    with db.connection() as connection, connection:
+        connection.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?",
+            (new_hashed_password, user["id"]),
+        )
+        
+        # Revoke all sessions for this user
+        connection.execute(
+            "DELETE FROM sessions WHERE user_id = ?",
+            (user["id"],),
+        )
+    
+    return True
+
+
+def validate_redirect_url(next_url: str | None, base_url: str = "http://localhost:8000") -> str:
+    """Validate redirect URL to prevent open redirects (CWE-601).
+    
+    Returns the validated URL or base_url if validation fails.
+    """
+    if not next_url:
+        return base_url
+    
+    # Strip whitespace and URL fragments
+    next_url = next_url.split("#")[0].strip()
+    
+    # Parse the URL
+    from urllib.parse import urlparse
+    parsed = urlparse(next_url)
+    
+    # Only allow relative URLs (no scheme, netloc, or path starting with http:// or https://)
+    if parsed.netloc and parsed.netloc != urlparse(base_url).netloc:
+        return base_url
+    
+    # Return the validated URL (relative or same-origin)
+    return next_url
+__all__ = [
+    "change_password_and_revoke_sessions",
+    "create_user_session",
+    "ensure_admin_user",
+    "get_current_user_optional",
+    "get_db",
+    "get_session_user",
+    "hash_password",
+    "require_admin",
+    "require_authenticated_user",
+    "revoke_session",
+    "SESSION_COOKIE_NAME",
+    "validate_redirect_url",
+    "verify_password",
+]

@@ -11,7 +11,7 @@ from collections.abc import Sequence
 
 import uvicorn
 
-from .auth import ensure_admin_user, hash_password
+from .auth import change_password_and_revoke_sessions, ensure_admin_user, hash_password
 from .collector import TrafficCollector
 from .config import settings
 from .db import Database
@@ -60,6 +60,33 @@ def cmd_create_user(args: argparse.Namespace) -> int:
     else:
         user_id = db.create_user(username=username, password_hash=hashed)
         logger.info("Created new user '%s' with id %d.", username, user_id)
+    return 0
+
+
+def cmd_change_password(args: argparse.Namespace) -> int:
+    """Change user password and revoke all active sessions for that user."""
+    db = Database(settings.database_path)
+    db.initialize()
+
+    username = args.username.strip()
+    if not username:
+        logger.error("Username cannot be empty")
+        return 1
+
+    # Get old password securely
+    old_password = getpass.getpass(f"Enter current password for '{username}': ")
+    new_password = getpass.getpass("Enter new password: ")
+    confirm = getpass.getpass("Confirm new password: ")
+    
+    if new_password != confirm:
+        logger.error("Passwords do not match")
+        return 1
+    
+    if not change_password_and_revoke_sessions(db, username, old_password, new_password):
+        logger.error("Incorrect current password")
+        return 1
+    
+    logger.info("Password changed successfully for user '%s' and all sessions revoked.", username)
     return 0
 
 
