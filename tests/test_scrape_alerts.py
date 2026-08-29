@@ -8,6 +8,7 @@ the sender, so nothing here can reach a real WhatsApp gateway.
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -21,8 +22,11 @@ from mrtg_cmp.orbit.scraper import OrbitModemStatus
 from mrtg_cmp.orbit.service import OrbitDaemon, OrbitService
 from mrtg_cmp.orbit.targets import OrbitModem
 from mrtg_cmp.scrape_alerts import (
+    ALERT_FAILURE_THRESHOLD,
+    ALERT_STATE_FILENAME,
     SERVICE_NETCARE,
     SERVICE_ORBIT,
+    FailureStreakTracker,
     ScrapeFailure,
     format_scrape_failure_alert,
     netcare_failures,
@@ -164,6 +168,79 @@ def _orbit_daemon(
         interval_seconds=1,
         sleeper=lambda _seconds: None,
         alerts=alerter,
+    )
+
+
+class ScriptedScraper:
+    """Orbit scraper double whose canned errors advance one round at a time.
+
+    The daemon's sleeper hook runs between rounds, which is the only public
+    seam at which a per-round script can be advanced.
+    """
+
+    def __init__(self, error_rounds: list[dict[int, str]]) -> None:
+        self._rounds = error_rounds
+        self._index = 0
+        self.errors: dict[int, str] = dict(error_rounds[0])
+
+    def advance(self) -> None:
+        """Move to the next scripted round, holding the last one forever."""
+
+        self._index = min(self._index + 1, len(self._rounds) - 1)
+        self.errors = dict(self._rounds[self._index])
+
+    def scrape_modem(self, target: OrbitModem, driver: Any = None) -> OrbitModemStatus:
+        error = self.errors.get(target.no)
+        if target.imei_valid is False and error is None:
+            error = "IMEI_PENDING"
+        return _status(target, error)
+
+
+def _scripted_netcare_daemon(
+    cache: NetcareCache,
+    rounds: list[list[ScrapeOutcome]],
+    alerter: RecordingAlerter,
+    streaks: FailureStreakTracker | None = None,
+) -> NetcareDaemon:
+    """Daemon replaying a scripted outcome list per round."""
+
+    service = NetcareService(cache, [_target(i) for i in range(1, 9)])
+    script = list(rounds)
+
+    def run_round() -> list[ScrapeOutcome]:
+        return list(script.pop(0)) if len(script) > 1 else list(script[0])
+
+    return NetcareDaemon(
+        service=service,
+        run_round=run_round,
+        interval_seconds=1,
+        sleeper=lambda _seconds: None,
+        alerts=alerter,
+        streaks=streaks,
+    )
+
+
+def _scripted_orbit_daemon(
+    catalog: list[OrbitModem],
+    error_rounds: list[dict[int, str]],
+    alerter: RecordingAlerter,
+    tmp_path: Path,
+    monkeypatch: Any,
+    streaks: FailureStreakTracker | None = None,
+) -> OrbitDaemon:
+    """Daemon replaying one canned error map per round."""
+
+    monkeypatch.setattr(orbit_service, "build_orbit_driver", lambda **_kw: None)
+    scraper = ScriptedScraper(error_rounds)
+    service = OrbitService(scraper=scraper)  # type: ignore[arg-type]
+    return OrbitDaemon(
+        service=service,
+        catalog_loader=lambda: list(catalog),
+        cache=OrbitCache(tmp_path / "modems.json"),
+        interval_seconds=1,
+        sleeper=lambda _seconds: scraper.advance(),
+        alerts=alerter,
+        streaks=streaks,
     )
 
 
@@ -393,7 +470,7 @@ def test_netcare_daemon_stays_silent_on_a_clean_round(tmp_path: Path) -> None:
 
 
 def test_netcare_daemon_sends_one_aggregate_alert_per_round(tmp_path: Path) -> None:
-    """Three failures in one round produce one message naming all three."""
+    """Three failed rounds stay quiet; the fourth produces one message naming all three."""
 
     alerter = RecordingAlerter()
     daemon = _netcare_daemon(
@@ -407,7 +484,7 @@ def test_netcare_daemon_sends_one_aggregate_alert_per_round(tmp_path: Path) -> N
         alerter,
     )
 
-    assert daemon.run(max_rounds=1) == 1
+    assert daemon.run(max_rounds=4) == 4
     assert len(alerter.calls) == 1
 
     service, failures, total = alerter.calls[0]
@@ -437,7 +514,7 @@ def test_netcare_daemon_alert_identifies_a_stale_cache(tmp_path: Path) -> None:
         alerter,
     )
 
-    daemon.run(max_rounds=1)
+    daemon.run(max_rounds=4)
 
     assert len(alerter.calls) == 1
     assert alerter.calls[0][1][0].stale is True
@@ -455,7 +532,7 @@ def test_netcare_daemon_survives_a_raising_alerter(tmp_path: Path) -> None:
     )
 
     with warnings() as records:
-        assert daemon.run(max_rounds=1) == 1
+        assert daemon.run(max_rounds=4) == 4
 
     assert any("alert" in record.lower() for record in records)
 
@@ -510,13 +587,13 @@ def test_orbit_daemon_ignores_a_round_of_only_pending_imeis(
 def test_orbit_daemon_sends_one_aggregate_alert_excluding_pending(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
-    """A real failure alerts once; the pending modem stays out of the message."""
+    """Four failed rounds alert once; the pending modem stays out of the message."""
 
     alerter = RecordingAlerter()
     catalog = [_modem(1), _modem(2, valid=False), _modem(3)]
     daemon = _orbit_daemon(catalog, {3: "quota lookup failed"}, alerter, tmp_path, monkeypatch)
 
-    assert daemon.run(max_rounds=1) == 1
+    assert daemon.run(max_rounds=4) == 4
     assert len(alerter.calls) == 1
 
     service, failures, total = alerter.calls[0]
@@ -533,7 +610,7 @@ def test_orbit_daemon_survives_a_raising_alerter(tmp_path: Path, monkeypatch: An
     daemon = _orbit_daemon([_modem(1)], {1: "portal error"}, alerter, tmp_path, monkeypatch)
 
     with warnings() as records:
-        assert daemon.run(max_rounds=1) == 1
+        assert daemon.run(max_rounds=4) == 4
 
     assert any("alert" in record.lower() for record in records)
 
@@ -560,3 +637,407 @@ def test_orbit_daemon_sends_no_alert_when_the_round_itself_raises(
 
     assert daemon.run(max_rounds=1) == 1
     assert alerter.calls == []
+
+
+# --- consecutive-failure threshold -----------------------------------------
+
+
+def test_netcare_stays_silent_below_the_threshold(tmp_path: Path) -> None:
+    """Three consecutive failures are transient; nobody is paged yet."""
+
+    alerter = RecordingAlerter()
+    failing = [ScrapeOutcome.from_error("target-001", "portal timeout")]
+    daemon = _scripted_netcare_daemon(NetcareCache(tmp_path / "cache"), [failing] * 3, alerter)
+
+    assert daemon.run(max_rounds=3) == 3
+    assert alerter.calls == []
+
+
+def test_netcare_alerts_on_the_fourth_consecutive_failure(tmp_path: Path) -> None:
+    """The fourth consecutive failed round is the one that crosses the line."""
+
+    alerter = RecordingAlerter()
+    failing = [ScrapeOutcome.from_error("target-001", "portal timeout")]
+    daemon = _scripted_netcare_daemon(NetcareCache(tmp_path / "cache"), [failing] * 4, alerter)
+
+    assert daemon.run(max_rounds=4) == 4
+    assert len(alerter.calls) == 1
+
+    service, failures, total = alerter.calls[0]
+    assert service == SERVICE_NETCARE
+    assert total == 1
+    assert [f.target for f in failures] == ["target-001"]
+    assert failures[0].streak == ALERT_FAILURE_THRESHOLD + 1
+
+
+def test_netcare_does_not_repeat_the_alert_while_the_failure_continues(tmp_path: Path) -> None:
+    """A latched target stays quiet no matter how long the outage runs."""
+
+    alerter = RecordingAlerter()
+    failing = [ScrapeOutcome.from_error("target-001", "portal timeout")]
+    daemon = _scripted_netcare_daemon(NetcareCache(tmp_path / "cache"), [failing] * 9, alerter)
+
+    assert daemon.run(max_rounds=9) == 9
+    assert len(alerter.calls) == 1
+
+
+def test_netcare_rearms_the_alert_after_a_success_resets_the_streak(tmp_path: Path) -> None:
+    """A fresh success clears both the counter and the latch."""
+
+    alerter = RecordingAlerter()
+    failing = [ScrapeOutcome.from_error("target-001", "portal timeout")]
+    healthy = [ScrapeOutcome.from_ok("target-001")]
+    rounds = [failing] * 4 + [healthy] + [failing] * 3
+    daemon = _scripted_netcare_daemon(NetcareCache(tmp_path / "cache"), rounds, alerter)
+
+    # Four failures cross the threshold once, then a success and three more
+    # failures stay below it again.
+    assert daemon.run(max_rounds=8) == 8
+    assert len(alerter.calls) == 1
+
+
+def test_orbit_alerts_on_the_fourth_consecutive_failure(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Orbit uses the same threshold as Netcare."""
+
+    alerter = RecordingAlerter()
+    rounds = [{1: "portal error"}] * 4
+    daemon = _scripted_orbit_daemon([_modem(1)], rounds, alerter, tmp_path, monkeypatch)
+
+    assert daemon.run(max_rounds=4) == 4
+    assert len(alerter.calls) == 1
+
+    service, failures, total = alerter.calls[0]
+    assert service == SERVICE_ORBIT
+    assert total == 1
+    assert [f.target for f in failures] == ["869338000000001"]
+
+
+def test_orbit_stays_silent_below_the_threshold(tmp_path: Path, monkeypatch: Any) -> None:
+    """Three consecutive modem failures do not page anyone."""
+
+    alerter = RecordingAlerter()
+    rounds = [{1: "portal error"}] * 3
+    daemon = _scripted_orbit_daemon([_modem(1)], rounds, alerter, tmp_path, monkeypatch)
+
+    assert daemon.run(max_rounds=3) == 3
+    assert alerter.calls == []
+
+
+def test_orbit_does_not_repeat_the_alert_while_the_failure_continues(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """A latched modem stays quiet for the rest of the outage."""
+
+    alerter = RecordingAlerter()
+    rounds = [{1: "portal error"}] * 8
+    daemon = _scripted_orbit_daemon([_modem(1)], rounds, alerter, tmp_path, monkeypatch)
+
+    assert daemon.run(max_rounds=8) == 8
+    assert len(alerter.calls) == 1
+
+
+def test_orbit_pending_imei_never_advances_a_streak(tmp_path: Path, monkeypatch: Any) -> None:
+    """An expected skip is neither a failure nor a reset of the counter."""
+
+    alerter = RecordingAlerter()
+    catalog = [_modem(1), _modem(2, valid=False)]
+    # Modem 1 fails every round; modem 2 stays IMEI_PENDING throughout.
+    rounds = [{1: "portal error"}] * 6
+    daemon = _scripted_orbit_daemon(catalog, rounds, alerter, tmp_path, monkeypatch)
+
+    assert daemon.run(max_rounds=6) == 6
+    assert len(alerter.calls) == 1
+
+    _, failures, _ = alerter.calls[0]
+    assert [f.target for f in failures] == ["869338000000001"]
+    assert "IMEI_PENDING" not in alerter.messages[0]
+
+
+def test_netcare_and_orbit_streaks_are_tracked_separately(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Two services failing at once must not share a counter or a latch."""
+
+    netcare_alerter = RecordingAlerter()
+    orbit_alerter = RecordingAlerter()
+    streaks = FailureStreakTracker(tmp_path / "streaks.json")
+
+    failing = [ScrapeOutcome.from_error("target-001", "portal timeout")]
+    netcare = _scripted_netcare_daemon(
+        NetcareCache(tmp_path / "netcare"), [failing] * 3, netcare_alerter, streaks
+    )
+    assert netcare.run(max_rounds=3) == 3
+
+    orbit = _scripted_orbit_daemon(
+        [_modem(1)],
+        [{1: "portal error"}] * 3,
+        orbit_alerter,
+        tmp_path,
+        monkeypatch,
+        streaks,
+    )
+    assert orbit.run(max_rounds=3) == 3
+
+    # Three rounds each: neither service has crossed yet.
+    assert netcare_alerter.calls == []
+    assert orbit_alerter.calls == []
+
+    # The fourth failure crosses for Netcare only.
+    more = _scripted_netcare_daemon(
+        NetcareCache(tmp_path / "netcare"), [failing], netcare_alerter, streaks
+    )
+    assert more.run(max_rounds=1) == 1
+    assert len(netcare_alerter.calls) == 1
+    assert orbit_alerter.calls == []
+
+
+def test_streak_state_file_stays_next_to_the_cache_and_holds_no_credentials(
+    tmp_path: Path,
+) -> None:
+    """The persisted record carries target ids and counters, nothing sensitive."""
+
+    alerter = RecordingAlerter()
+    failing = [ScrapeOutcome.from_error("target-001", "portal timeout")]
+    cache_dir = tmp_path / "cache"
+    daemon = _scripted_netcare_daemon(NetcareCache(cache_dir), [failing] * 4, alerter)
+
+    daemon.run(max_rounds=4)
+
+    state_path = cache_dir / ALERT_STATE_FILENAME
+    assert state_path.is_file()
+
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    entry = payload["services"][SERVICE_NETCARE]["target-001"]
+    assert entry["consecutive_failures"] == ALERT_FAILURE_THRESHOLD + 1
+    assert entry["alerted"] is True
+
+    raw = state_path.read_text(encoding="utf-8").lower()
+    for secret in ("password", "secret", "cookie", "token", "telkom_user", "otp"):
+        assert secret not in raw
+
+
+def test_corrupt_streak_state_starts_over_without_raising(tmp_path: Path) -> None:
+    """A damaged state file must never take the scrape loop down."""
+
+    state_path = tmp_path / "streaks.json"
+    state_path.write_text("{not json", encoding="utf-8")
+    failures = [ScrapeFailure(target="target-001", reason="portal timeout")]
+
+    # The damaged file is read while the tracker is constructed, so the warning
+    # is expected there rather than during the rounds.
+    with warnings() as records:
+        streaks = FailureStreakTracker(state_path)
+        rounds = [
+            streaks.record_round(SERVICE_NETCARE, failures, [])
+            for _ in range(ALERT_FAILURE_THRESHOLD + 1)
+        ]
+
+    # The unreadable state is discarded rather than raised, and the counter
+    # restarts from zero: the target alerts on exactly its own fourth failure.
+    assert rounds[:ALERT_FAILURE_THRESHOLD] == [[], [], []]
+    assert len(rounds[ALERT_FAILURE_THRESHOLD]) == 1
+    assert rounds[ALERT_FAILURE_THRESHOLD][0].streak == ALERT_FAILURE_THRESHOLD + 1
+    assert any("streak" in record.lower() for record in records)
+
+
+def test_missing_streak_state_warns_and_starts_from_zero(tmp_path: Path) -> None:
+    """No state file is the cold-start case, and it is announced rather than silent.
+
+    A daemon started onto a live outage loses its counters when the file is
+    absent, so it will alert again. That is the safe direction to fail in, but
+    an operator should still be able to see it happen.
+    """
+
+    state_path = tmp_path / "streaks.json"
+    assert not state_path.exists()
+    failures = [ScrapeFailure(target="target-001", reason="portal timeout")]
+
+    with warnings() as records:
+        streaks = FailureStreakTracker(state_path)
+        rounds = [
+            streaks.record_round(SERVICE_NETCARE, failures, [])
+            for _ in range(ALERT_FAILURE_THRESHOLD + 1)
+        ]
+
+    assert any("streak" in record.lower() for record in records)
+    assert rounds[:ALERT_FAILURE_THRESHOLD] == [[], [], []]
+    assert len(rounds[ALERT_FAILURE_THRESHOLD]) == 1
+    assert rounds[ALERT_FAILURE_THRESHOLD][0].streak == ALERT_FAILURE_THRESHOLD + 1
+
+
+def test_streak_tracker_resets_on_success_and_rearms(tmp_path: Path) -> None:
+    """The tracker itself re-arms once the target succeeds again."""
+
+    streaks = FailureStreakTracker(tmp_path / "streaks.json")
+    failure = ScrapeFailure(target="target-001", reason="portal timeout")
+
+    for _ in range(ALERT_FAILURE_THRESHOLD):
+        assert streaks.record_round(SERVICE_NETCARE, [failure], []) == []
+
+    crossing = streaks.record_round(SERVICE_NETCARE, [failure], [])
+    assert [f.target for f in crossing] == ["target-001"]
+    assert crossing[0].streak == ALERT_FAILURE_THRESHOLD + 1
+
+    # Still failing but already latched: no second alert.
+    assert streaks.record_round(SERVICE_NETCARE, [failure], []) == []
+
+    # A fresh success clears both the counter and the latch.
+    streaks.record_round(SERVICE_NETCARE, [], ["target-001"])
+    for _ in range(ALERT_FAILURE_THRESHOLD):
+        assert streaks.record_round(SERVICE_NETCARE, [failure], []) == []
+    assert len(streaks.record_round(SERVICE_NETCARE, [failure], [])) == 1
+
+
+def test_streak_tracker_counts_each_service_separately(tmp_path: Path) -> None:
+    """One state file, two services, independent counters."""
+
+    streaks = FailureStreakTracker(tmp_path / "streaks.json")
+    failure = ScrapeFailure(target="target-001", reason="portal timeout")
+
+    netcare: list[ScrapeFailure] = []
+    orbit: list[ScrapeFailure] = []
+    for _ in range(ALERT_FAILURE_THRESHOLD + 1):
+        netcare += streaks.record_round(SERVICE_NETCARE, [failure], [])
+        orbit += streaks.record_round(SERVICE_ORBIT, [failure], [])
+
+    # Both latch on their own fourth failure: neither service inherits the
+    # other's count or latch, even though the file and target id are shared.
+    assert [f.streak for f in netcare] == [ALERT_FAILURE_THRESHOLD + 1]
+    assert [f.streak for f in orbit] == [ALERT_FAILURE_THRESHOLD + 1]
+
+    # Re-arming one service leaves the other latched.
+    streaks.record_round(SERVICE_NETCARE, [], ["target-001"])
+    assert streaks.record_round(SERVICE_ORBIT, [failure], []) == []
+
+
+def test_streak_tracker_drops_targets_that_left_the_catalog(tmp_path: Path) -> None:
+    """A retired target must not keep its record alive forever."""
+
+    streaks = FailureStreakTracker(tmp_path / "streaks.json")
+    failure = ScrapeFailure(target="target-001", reason="portal timeout")
+
+    streaks.record_round(SERVICE_NETCARE, [failure], [])
+    # A clean round that no longer mentions the target retires it.
+    streaks.record_round(SERVICE_NETCARE, [], ["target-002"])
+
+    assert streaks.record_round(SERVICE_NETCARE, [failure], []) == []
+
+
+def test_alert_message_names_the_streak_length(tmp_path: Path) -> None:
+    """The aggregate message tells the reader how long the target has been down."""
+
+    message = format_scrape_failure_alert(
+        SERVICE_NETCARE,
+        [ScrapeFailure(target="target-001", reason="portal timeout", streak=4)],
+        total=18,
+        timestamp="2026-10-06 10:00:00",
+    )
+
+    assert "target-001" in message
+    assert "4 consecutive rounds" in message
+
+
+def test_orbit_pending_imei_does_not_reset_a_pending_streak(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Rounds made only of pending IMEIs must not clear a real failure streak."""
+
+    alerter = RecordingAlerter()
+    catalog = [_modem(1, valid=False)]
+    # Three real failures, then a round that reports only the pending skip.
+    rounds = [{1: "portal error"}] * 3 + [{}]
+    daemon = _scripted_orbit_daemon(catalog, rounds, alerter, tmp_path, monkeypatch)
+
+    assert daemon.run(max_rounds=4) == 4
+    assert alerter.calls == []
+
+
+def test_orbit_pending_imei_stays_neutral_while_another_modem_reports(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """A modem awaiting its IMEI keeps its streak even when others are reporting.
+
+    This is the case a lone-pending round never reaches: the catalog is re-read
+    every round, so a modem can start reporting ``IMEI_PENDING`` in the middle
+    of a real outage. The skip must not be mistaken for the modem leaving the
+    catalog, or the failure streak is silently thrown away and the alert that
+    was about to fire never fires.
+    """
+
+    alerter = RecordingAlerter()
+    # Modem 1 has no IMEI yet, but is scripted to fail until round four; modem 2
+    # is fine and takes over as the round's only reporter.
+    catalog = [_modem(1, valid=False), _modem(2)]
+    rounds = [{1: "portal error"}] * 3 + [{2: "portal error"}] + [{1: "portal error"}]
+    daemon = _scripted_orbit_daemon(catalog, rounds, alerter, tmp_path, monkeypatch)
+
+    assert daemon.run(max_rounds=5) == 5
+    # Three failures, a neutral pending round, then a fourth failure: the streak
+    # survived, so the crossing round still alerts.
+    assert len(alerter.calls) == 1
+
+
+def test_orbit_rearms_the_alert_after_a_success_resets_the_streak(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """A recovered modem starts a brand new streak after recovery."""
+
+    alerter = RecordingAlerter()
+    rounds = [{1: "portal error"}] * 4 + [{}] + [{1: "portal error"}] * 4
+    daemon = _scripted_orbit_daemon([_modem(1)], rounds, alerter, tmp_path, monkeypatch)
+
+    assert daemon.run(max_rounds=9) == 9
+    assert len(alerter.calls) == 2
+
+
+def test_netcare_alerts_again_after_recovery_and_a_fresh_streak(tmp_path: Path) -> None:
+    """Recovery plus another four failures produces a second alert."""
+
+    alerter = RecordingAlerter()
+    failing = [ScrapeOutcome.from_error("target-001", "portal timeout")]
+    healthy = [ScrapeOutcome.from_ok("target-001")]
+    rounds = [failing] * 4 + [healthy] + [failing] * 4
+    daemon = _scripted_netcare_daemon(NetcareCache(tmp_path / "cache"), rounds, alerter)
+
+    assert daemon.run(max_rounds=9) == 9
+    assert len(alerter.calls) == 2
+
+
+def test_netcare_tracks_each_target_independently(tmp_path: Path) -> None:
+    """One target's streak never borrows another target's count or latch."""
+
+    alerter = RecordingAlerter()
+    # target-002 fails for four straight rounds; target-003 fails only once.
+    ok = ScrapeOutcome.from_ok("target-003")
+    rounds = [
+        [ScrapeOutcome.from_error("target-002", "portal timeout"), ok],
+        [ScrapeOutcome.from_error("target-002", "portal timeout"), ok],
+        [ScrapeOutcome.from_error("target-002", "portal timeout"), ok],
+        [
+            ScrapeOutcome.from_error("target-002", "portal timeout"),
+            ScrapeOutcome.from_error("target-003", "blip"),
+        ],
+    ]
+    daemon = _scripted_netcare_daemon(NetcareCache(tmp_path / "cache"), rounds, alerter)
+
+    assert daemon.run(max_rounds=4) == 4
+    assert len(alerter.calls) == 1
+    assert [f.target for f in alerter.calls[0][1]] == ["target-002"]
+
+
+def test_netcare_streaks_survive_a_daemon_restart(tmp_path: Path) -> None:
+    """The counter lives next to the cache, so a restart does not re-alert."""
+
+    cache_dir = tmp_path / "cache"
+    alerter = RecordingAlerter()
+    failing = [ScrapeOutcome.from_error("target-001", "portal timeout")]
+
+    first = _scripted_netcare_daemon(NetcareCache(cache_dir), [failing] * 3, alerter)
+    assert first.run(max_rounds=3) == 3
+    assert alerter.calls == []
+
+    restarted = _scripted_netcare_daemon(NetcareCache(cache_dir), [failing] * 2, alerter)
+    assert restarted.run(max_rounds=2) == 2
+    assert len(alerter.calls) == 1

@@ -27,8 +27,10 @@ from typing import Any
 from ..config import Settings
 from ..config import settings as global_settings
 from ..scrape_alerts import (
+    ALERT_STATE_FILENAME,
     SERVICE_NETCARE,
     AlertSender,
+    FailureStreakTracker,
     netcare_failures,
     send_scrape_failure_alert,
 )
@@ -618,6 +620,7 @@ class NetcareDaemon:
         sleeper: Callable[[int], None] | None = None,
         on_close: Callable[[], None] | None = None,
         alerts: AlertSender | None = None,
+        streaks: FailureStreakTracker | None = None,
     ) -> None:
         self.service = service
         self.run_round = run_round
@@ -625,6 +628,9 @@ class NetcareDaemon:
         self._sleep = sleeper or _wait
         self._on_close = on_close
         self._alerts = alerts or send_scrape_failure_alert
+        self._streaks = streaks or FailureStreakTracker(
+            service.cache.cache_dir / ALERT_STATE_FILENAME
+        )
 
     def install_signal_handlers(self, stop_event: threading.Event) -> None:
         """Ask the loop to stop on SIGINT/SIGTERM (best effort on non-POSIX)."""
@@ -660,18 +666,25 @@ class NetcareDaemon:
         return completed
 
     def _alert_on_failures(self, outcomes: list[ScrapeOutcome]) -> None:
-        """Send one aggregate alert when a completed round had any failure.
+        """Send one aggregate alert when a target has failed too many rounds running.
 
-        A clean round stays silent. The call is contained here rather than left
-        to the round's own handler, so a gateway fault is reported as an alert
-        problem and cannot be mistaken for the scrape round having failed.
+        A clean round stays silent, and so do the first few failed rounds: only
+        a target that crosses :data:`ALERT_FAILURE_THRESHOLD` consecutive
+        failures is reported, and only once until it succeeds again. Call the
+        seam here rather than from the round's own handler, so a gateway fault
+        is reported as an alert problem and cannot be mistaken for the scrape
+        round having failed.
         """
 
         failures = netcare_failures(outcomes, self.service.cache)
-        if not failures:
+        succeeded = [
+            str(o.target) for o in outcomes if o.status == STATUS_OK and o.target
+        ]
+        crossing = self._streaks.record_round(SERVICE_NETCARE, failures, succeeded)
+        if not crossing:
             return
         try:
-            self._alerts(SERVICE_NETCARE, failures, len(outcomes))
+            self._alerts(SERVICE_NETCARE, crossing, len(outcomes))
         except Exception as exc:
             logger.warning("Netcare scrape failure alert could not be delivered: %s", exc)
 

@@ -16,9 +16,12 @@ from mrtg_cmp.orbit.cache import OrbitCache
 from mrtg_cmp.orbit.scraper import OrbitModemStatus, OrbitScraper
 from mrtg_cmp.orbit.targets import OrbitModem
 from mrtg_cmp.scrape_alerts import (
+    ALERT_STATE_FILENAME,
     SERVICE_ORBIT,
     AlertSender,
+    FailureStreakTracker,
     orbit_failures,
+    orbit_identifier,
     send_scrape_failure_alert,
 )
 
@@ -206,6 +209,7 @@ class OrbitDaemon:
         interval_seconds: int = 300,
         sleeper: Callable[[int], None] | None = None,
         alerts: AlertSender | None = None,
+        streaks: FailureStreakTracker | None = None,
     ) -> None:
         self.service = service
         self.catalog_loader = catalog_loader
@@ -213,6 +217,9 @@ class OrbitDaemon:
         self.interval_seconds = max(1, interval_seconds)
         self._sleeper = sleeper
         self._alerts = alerts or send_scrape_failure_alert
+        self._streaks = streaks or FailureStreakTracker(
+            cache.cache_file.parent / ALERT_STATE_FILENAME
+        )
 
     def _sleep(self, seconds: int, stop_event: threading.Event | None = None) -> None:
         if self._sleeper is not None:
@@ -267,18 +274,37 @@ class OrbitDaemon:
         return completed
 
     def _alert_on_failures(self, statuses: list[OrbitModemStatus]) -> None:
-        """Send one aggregate alert when a completed round had any failure.
+        """Send one aggregate alert when a modem has failed too many rounds running.
 
-        A round of pending IMEIs is a normal skip and stays silent. Containment
-        mirrors the Netcare daemon: a gateway fault is an alert problem, not a
-        reason for the scrape round to be recorded as failed.
+        Only a modem that crosses the consecutive-failure threshold is reported,
+        and only once until it succeeds again, mirroring the Netcare daemon. A
+        round of pending IMEIs is a normal skip: it stays silent and, because
+        such a modem is neither a success nor a failure, it neither advances nor
+        clears the streak it had already earned. Containment mirrors the Netcare
+        daemon too: a gateway fault is an alert problem, not a reason for the
+        scrape round to be recorded as failed.
         """
 
         failures = orbit_failures(statuses)
-        if not failures:
+        succeeded = [
+            orbit_identifier(s)
+            for s in statuses
+            if not getattr(s, "error", None)
+        ]
+        # A modem still waiting on its IMEI is neither healthy nor broken, so it
+        # is reported as skipped: the round spoke about it, and that keeps a
+        # live failure streak from being mistaken for a modem that left the
+        # catalog.
+        skipped = [
+            orbit_identifier(s)
+            for s in statuses
+            if getattr(s, "error", None) == "IMEI_PENDING"
+        ]
+        crossing = self._streaks.record_round(SERVICE_ORBIT, failures, succeeded, skipped)
+        if not crossing:
             return
         try:
-            self._alerts(SERVICE_ORBIT, failures, len(statuses))
+            self._alerts(SERVICE_ORBIT, crossing, len(statuses))
         except Exception as exc:
             logger.warning("Orbit scrape failure alert could not be delivered: %s", exc)
 
