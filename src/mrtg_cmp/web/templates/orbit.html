@@ -610,10 +610,11 @@
             <h2>📡 Telkomsel Orbit Modem Monitoring</h2>
             <p class="orbit-subtitle">Multi-package quota monitoring, package validity, and Orbit modem inventory</p>
         </div>
+        <div id="orbit-sync-status" role="status" aria-live="polite" style="display:none"></div>
         <div class="orbit-actions">
             <span class="status-badge">
                 <span class="status-dot up"></span>
-                Live poll: 180s &middot; Auto-refresh: <span id="orbit-countdown-timer">180</span>s
+                Live scraping runs on demand; cache refresh: <span id="orbit-countdown-timer">180</span>s
             </span>
             <button id="btn-orbit-refresh-all" class="btn-sync" type="button" title="Refresh and synchronize all Orbit modems">
                 <svg class="sync-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -955,6 +956,8 @@ document.addEventListener('DOMContentLoaded', () => {
     async function triggerOrbitSync() {
         const btn = document.getElementById('btn-orbit-refresh-all');
         if (btn) btn.classList.add('loading');
+        const statusEl = document.getElementById('orbit-sync-status');
+        if (statusEl) { statusEl.style.display = 'block'; statusEl.textContent = 'Orbit sync queued; live scraping will run in the background.'; }
 
         try {
             const resp = await fetch('/api/orbit/sync', {
@@ -962,24 +965,37 @@ document.addEventListener('DOMContentLoaded', () => {
                 headers: { 'Accept': 'application/json' }
             });
             if (resp.ok) {
-                showToast('✅ Orbit modem quota sync started successfully!');
-                await refreshOrbitModems();
+                showToast('Orbit live sync queued');
+                pollOrbitSyncStatus();
             } else {
-                showToast('⚠️ Failed to sync Orbit modem quota');
+                if (statusEl) statusEl.textContent = 'Orbit live sync could not be queued.';
+                showToast('Failed to queue Orbit live sync');
             }
         } catch (err) {
             console.error('Sync error', err);
             showToast('❌ Network error during sync');
         } finally {
-            setTimeout(() => {
-                if (btn) btn.classList.remove('loading');
-            }, 1200);
+            if (btn) btn.classList.remove('loading');
+        }
+    }
+
+    async function pollOrbitSyncStatus() {
+        const statusEl = document.getElementById('orbit-sync-status');
+        try {
+            const response = await fetch('/api/orbit/sync/status', { headers: { 'Accept': 'application/json' } });
+            const result = await response.json();
+            const messages = { queued: 'Orbit live sync queued.', running: 'Orbit live scraping is running.', done: 'Orbit live sync complete.', error: `Orbit live sync failed: ${result.error || 'unknown error'}` };
+            if (statusEl && messages[result.state]) { statusEl.style.display = 'block'; statusEl.textContent = messages[result.state]; }
+            if (result.state === 'running' || result.state === 'queued') setTimeout(pollOrbitSyncStatus, 2000);
+            if (result.state === 'done') await refreshOrbitModems();
+        } catch (err) {
+            if (statusEl) { statusEl.style.display = 'block'; statusEl.textContent = 'Unable to read live sync status.'; }
         }
     }
     window.triggerOrbitSync = triggerOrbitSync;
 
     // 4. Auto-refresh & Countdown (Phase 40)
-    const ORBIT_POLL_SECONDS = 180;
+        const ORBIT_POLL_SECONDS = 300;
     let orbitSecondsLeft = ORBIT_POLL_SECONDS;
     const countdownEl = document.getElementById('orbit-countdown-timer');
     const refreshAllBtn = document.getElementById('btn-orbit-refresh-all');

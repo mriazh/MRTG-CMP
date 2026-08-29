@@ -508,20 +508,6 @@ class OrbitScraper:
                 error="IMEI_PENDING",
             )
 
-        if target.status == "EX_CUSTOMER":
-            logger.info("Modem %s is EX_CUSTOMER -> returning archived status", target.no)
-            return OrbitModemStatus(
-                target=target,
-                total_remaining_gb=0.0,
-                total_quota_gb=0.0,
-                multimedia_active=False,
-                packages=[],
-                earliest_expiry_str=None,
-                earliest_days_left=None,
-                last_scraped_at=now_str,
-                error="EX_CUSTOMER",
-            )
-
         if driver is None:
             # Running without a live driver, return clean pending/mock or handle via driver
             logger.debug("No live WebDriver supplied for modem %s", target.no)

@@ -152,7 +152,7 @@ class Settings(BaseSettings):
     orbit_portal_url: str = "https://www.myorbit.id/informasi-modem-input"
     orbit_catalog_file: Path | None = None
     orbit_cache_dir: Path = Path("data/orbit_cache")
-    orbit_sync_interval_seconds: int = 1800
+    orbit_sync_interval_seconds: int = 300
 
     # Gemini Vision multi-key CAPTCHA solving (comma separated in the environment).
     # Keep in step with VALID_GEMINI_VISION_MODELS in netcare/captcha.py: a name

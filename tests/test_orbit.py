@@ -7,7 +7,7 @@ import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 from starlette.testclient import TestClient
 
@@ -71,6 +71,12 @@ def test_orbit_modem_model_and_imei_validation() -> None:
         ssid="Orbit-Test-03",
     )
     assert invalid_chars.imei_valid is False
+
+
+def test_default_orbit_daemon_interval_is_five_minutes() -> None:
+    from mrtg_cmp.config import settings
+
+    assert settings.orbit_sync_interval_seconds == 300
 
 
 def test_default_catalog_structure_and_counts() -> None:
@@ -314,8 +320,8 @@ def test_parse_package_cards_text_format() -> None:
     assert packages[2].days_left == 13
 
 
-def test_orbit_scraper_invalid_imei_and_ex_customer_skips_portal() -> None:
-    """Modems with invalid IMEI or EX_CUSTOMER status resolve without driver calls."""
+def test_orbit_scraper_invalid_imei_skips_portal_but_valid_ex_customer_needs_driver() -> None:
+    """Only invalid IMEI skips MyOrbit; valid EX_CUSTOMER modem needs a driver."""
     scraper = OrbitScraper()
 
     # 10-digit IMEI modem
@@ -329,9 +335,13 @@ def test_orbit_scraper_invalid_imei_and_ex_customer_skips_portal() -> None:
     modem_ex = OrbitModem(
         10, "860000000000010", "081200000010", "Old Site", "Orbit-Old", status="EX_CUSTOMER"
     )
-    status_ex = scraper.scrape_modem(modem_ex)
-    assert status_ex.error == "EX_CUSTOMER"
-    assert status_ex.total_quota_gb == 0.0
+    driver = MagicMock()
+    with patch.object(
+        scraper, "_scrape_with_driver", return_value=OrbitModemStatus(target=modem_ex)
+    ) as scrape:
+        status_ex = scraper.scrape_modem(modem_ex, driver=driver)
+    scrape.assert_called_once_with(driver, modem_ex, ANY)
+    assert status_ex.error is None
 
 
 def test_orbit_scraper_with_mock_driver() -> None:
@@ -745,7 +755,7 @@ def test_api_orbit_sync_endpoint(client_with_db: TestClient) -> None:
         assert resp.status_code == 202
         data = resp.json()
         assert data["status"] == "accepted"
-        assert data["message"] == "Live Orbit sync started in background"
+        assert data["message"] == "Live Orbit sync queued"
         assert data["count"] == 12
         mock_srv.sync_in_background.assert_called_once()
 
@@ -768,6 +778,9 @@ def test_orbit_dashboard_html_view(client_with_db: TestClient) -> None:
     assert "View Package Details" in text
     assert "orbit-countdown-timer" in text
     assert "btn-orbit-refresh-all" in text
+    assert "orbit-sync-status" in text
+    assert "pollOrbitSyncStatus" in text
+    assert "fetch('/api/orbit/sync'" in text
     assert "orbit-package-modal" in text or "orbit-modal" in text
 
 
@@ -1024,7 +1037,10 @@ def test_orbit_service_sync_all(tmp_path: Path) -> None:
     assert statuses[1].error is None
     assert statuses[1].total_remaining_gb == 50.0
     assert statuses[1].target.ssid == "tselhome-8BCB"
-    assert statuses[2].error == "EX_CUSTOMER"
+    assert statuses[2].error is None
+    assert mock_driver.get.call_count == 2
+    assert phone_input.send_keys.call_args_list[-1].args[0] == catalog[2].phone
+    assert imei_input.send_keys.call_args_list[-1].args[0] == catalog[2].imei
 
     # Verify cache on disk
     assert cache.is_cached()
@@ -1124,7 +1140,7 @@ def test_orbit_daemon_runs_single_round(tmp_path: Path) -> None:
         service=mock_service,
         catalog_loader=lambda: catalog,
         cache=cache,
-        interval_seconds=1800,
+        interval_seconds=300,
         sleeper=lambda _sec: None,
     )
 
@@ -1144,7 +1160,7 @@ def test_orbit_daemon_stops_when_stop_event_set_before_run(tmp_path: Path) -> No
         service=mock_service,
         catalog_loader=list,
         cache=cache,
-        interval_seconds=1800,
+        interval_seconds=300,
         sleeper=lambda _sec: None,
     )
 
@@ -1189,7 +1205,7 @@ def test_orbit_daemon_survives_failing_round(tmp_path: Path) -> None:
         service=mock_service,
         catalog_loader=list,
         cache=cache,
-        interval_seconds=1800,
+        interval_seconds=300,
         sleeper=lambda _sec: None,
     )
 
@@ -1202,7 +1218,7 @@ def test_build_orbit_daemon_from_settings() -> None:
     daemon = build_orbit_daemon_from_settings()
     assert isinstance(daemon, OrbitDaemon)
     assert isinstance(daemon.service, OrbitService)
-    assert daemon.interval_seconds == 1800
+    assert daemon.interval_seconds == 300
     assert callable(daemon.catalog_loader)
     assert isinstance(daemon.cache, OrbitCache)
 

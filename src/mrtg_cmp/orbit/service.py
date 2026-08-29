@@ -73,6 +73,13 @@ class OrbitService:
         self.headless = headless
         self._lock = threading.Lock()
         self._is_syncing = False
+        self._sync_state = "idle"
+        self._sync_error: str | None = None
+
+    @property
+    def sync_status(self) -> dict[str, str | None]:
+        with self._lock:
+            return {"state": self._sync_state, "error": self._sync_error}
 
     @property
     def is_syncing(self) -> bool:
@@ -86,12 +93,7 @@ class OrbitService:
         cache: OrbitCache | None = None,
         driver: Any | None = None,
     ) -> list[OrbitModemStatus]:
-        """Synchronously scrape every modem in the catalog and update cache.
-
-        Handles modems with invalid IMEIs or EX_CUSTOMER status immediately
-        without launching a browser. Launches a shared headless Chrome driver
-        for active valid modems, and persists all statuses atomically to cache.
-        """
+        """Scrape every valid-IMEI modem, skip only pending IMEIs, and update cache."""
         with self._lock:
             already_syncing = self._is_syncing
             self._is_syncing = True
@@ -99,14 +101,14 @@ class OrbitService:
         own_driver = None
         statuses: list[OrbitModemStatus] = []
         try:
-            valid_targets = [m for m in catalog if m.imei_valid and m.status != "EX_CUSTOMER"]
+            valid_targets = [m for m in catalog if m.imei_valid]
             if driver is None and valid_targets:
                 own_driver = build_orbit_driver(headless=self.headless)
 
             active_driver = driver or own_driver
 
             for target in catalog:
-                if not target.imei_valid or target.status == "EX_CUSTOMER":
+                if not target.imei_valid:
                     st = self.scraper.scrape_modem(target)
                 else:
                     st = self.scraper.scrape_modem(target, driver=active_driver)
@@ -144,12 +146,21 @@ class OrbitService:
                 logger.info("Orbit sync is already in progress; skipping duplicate trigger")
                 return False
             self._is_syncing = True
+            self._sync_state = "queued"
+            self._sync_error = None
 
         def _worker() -> None:
+            with self._lock:
+                self._sync_state = "running"
             try:
                 self.sync_all(catalog, cache)
+                with self._lock:
+                    self._sync_state = "done"
             except Exception as exc:
                 logger.exception("Unexpected error during background Orbit sync: %s", exc)
+                with self._lock:
+                    self._sync_state = "error"
+                    self._sync_error = str(exc)
             finally:
                 with self._lock:
                     self._is_syncing = False
@@ -186,7 +197,7 @@ class OrbitDaemon:
         service: OrbitService,
         catalog_loader: Callable[[], list[OrbitModem]],
         cache: OrbitCache,
-        interval_seconds: int = 1800,
+        interval_seconds: int = 300,
         sleeper: Callable[[int], None] | None = None,
     ) -> None:
         self.service = service
@@ -222,10 +233,15 @@ class OrbitDaemon:
                 catalog = self.catalog_loader()
                 statuses = self.service.sync_all(catalog, self.cache)
                 completed += 1
-                ok = sum(1 for s in statuses if not s.error)
+                pending = sum(1 for s in statuses if s.error == "IMEI_PENDING")
+                failed = sum(1 for s in statuses if s.error and s.error != "IMEI_PENDING")
+                scraped = len(statuses) - pending - failed
                 logger.info(
-                    "Orbit daemon round complete: %s/%s modems updated",
-                    ok,
+                    "Orbit daemon round complete: %s scraped, %s IMEI_PENDING skipped, "
+                    "%s errors (%s total)",
+                    scraped,
+                    pending,
+                    failed,
                     len(statuses),
                 )
             except Exception as exc:

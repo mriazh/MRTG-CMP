@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from fastapi import BackgroundTasks, Depends, FastAPI, Form, Query, Request, status
+from fastapi import Depends, FastAPI, Form, Query, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -608,23 +608,29 @@ def api_orbit_modems(
     }
 
 
+@app.get("/api/orbit/sync/status")
+def api_orbit_sync_status(
+    current_user: dict[str, Any] = Depends(require_authenticated_user),
+) -> dict[str, str | None]:
+    return _orbit_service().sync_status
+
+
 @app.post("/api/orbit/sync")
 async def api_orbit_sync(
-    background_tasks: BackgroundTasks,
     current_user: dict[str, Any] = Depends(require_authenticated_user),
 ) -> Response:
-    """Trigger on-demand background sync for Orbit modems."""
+    """Trigger on-demand live sync for Orbit modems."""
     catalog = resolve_orbit_catalog(settings.orbit_catalog_file)
     cache = _orbit_cache()
     service = _orbit_service()
-    background_tasks.add_task(service.sync_in_background, catalog, cache)
+    started = service.sync_in_background(catalog, cache)
     return JSONResponse(
         {
-            "status": "accepted",
-            "message": "Live Orbit sync started in background",
+            "status": "accepted" if started else "already_running",
+            "message": "Live Orbit sync queued" if started else "Live Orbit sync already running",
             "count": len(catalog),
         },
-        status_code=status.HTTP_202_ACCEPTED,
+            status_code=status.HTTP_202_ACCEPTED,
     )
 
 
