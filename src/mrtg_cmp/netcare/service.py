@@ -26,6 +26,12 @@ from typing import Any
 
 from ..config import Settings
 from ..config import settings as global_settings
+from ..scrape_alerts import (
+    SERVICE_NETCARE,
+    AlertSender,
+    netcare_failures,
+    send_scrape_failure_alert,
+)
 from .captcha import GeminiCaptchaSolver
 from .query import STAGE_OPENING_BROWSER, StageCallback, branch_stage
 from .scraper import (
@@ -611,12 +617,14 @@ class NetcareDaemon:
         interval_seconds: int = DEFAULT_INTERVAL_SECONDS,
         sleeper: Callable[[int], None] | None = None,
         on_close: Callable[[], None] | None = None,
+        alerts: AlertSender | None = None,
     ) -> None:
         self.service = service
         self.run_round = run_round
         self.interval_seconds = max(1, interval_seconds)
         self._sleep = sleeper or _wait
         self._on_close = on_close
+        self._alerts = alerts or send_scrape_failure_alert
 
     def install_signal_handlers(self, stop_event: threading.Event) -> None:
         """Ask the loop to stop on SIGINT/SIGTERM (best effort on non-POSIX)."""
@@ -636,6 +644,7 @@ class NetcareDaemon:
                 completed += 1
                 ok = sum(1 for o in outcomes if o.status == "ok")
                 logger.info("Netcare round complete: %s/%s targets captured", ok, len(outcomes))
+                self._alert_on_failures(outcomes)
             except Exception as exc:
                 logger.error("Netcare round failed: %s", exc)
                 completed += 1
@@ -649,6 +658,22 @@ class NetcareDaemon:
                 logger.debug("Netcare pool close failed: %s", exc)
         logger.info("Netcare daemon stopped after %s round(s)", completed)
         return completed
+
+    def _alert_on_failures(self, outcomes: list[ScrapeOutcome]) -> None:
+        """Send one aggregate alert when a completed round had any failure.
+
+        A clean round stays silent. The call is contained here rather than left
+        to the round's own handler, so a gateway fault is reported as an alert
+        problem and cannot be mistaken for the scrape round having failed.
+        """
+
+        failures = netcare_failures(outcomes, self.service.cache)
+        if not failures:
+            return
+        try:
+            self._alerts(SERVICE_NETCARE, failures, len(outcomes))
+        except Exception as exc:
+            logger.warning("Netcare scrape failure alert could not be delivered: %s", exc)
 
 
 def _wait(seconds: int) -> None:

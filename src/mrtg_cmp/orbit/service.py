@@ -15,6 +15,12 @@ from typing import TYPE_CHECKING, Any
 from mrtg_cmp.orbit.cache import OrbitCache
 from mrtg_cmp.orbit.scraper import OrbitModemStatus, OrbitScraper
 from mrtg_cmp.orbit.targets import OrbitModem
+from mrtg_cmp.scrape_alerts import (
+    SERVICE_ORBIT,
+    AlertSender,
+    orbit_failures,
+    send_scrape_failure_alert,
+)
 
 if TYPE_CHECKING:
     from mrtg_cmp.config import Settings
@@ -199,12 +205,14 @@ class OrbitDaemon:
         cache: OrbitCache,
         interval_seconds: int = 300,
         sleeper: Callable[[int], None] | None = None,
+        alerts: AlertSender | None = None,
     ) -> None:
         self.service = service
         self.catalog_loader = catalog_loader
         self.cache = cache
         self.interval_seconds = max(1, interval_seconds)
         self._sleeper = sleeper
+        self._alerts = alerts or send_scrape_failure_alert
 
     def _sleep(self, seconds: int, stop_event: threading.Event | None = None) -> None:
         if self._sleeper is not None:
@@ -244,6 +252,7 @@ class OrbitDaemon:
                     failed,
                     len(statuses),
                 )
+                self._alert_on_failures(statuses)
             except Exception as exc:
                 logger.error("Orbit daemon round failed: %s", exc)
                 completed += 1
@@ -256,6 +265,22 @@ class OrbitDaemon:
 
         logger.info("Orbit daemon stopped after %s round(s)", completed)
         return completed
+
+    def _alert_on_failures(self, statuses: list[OrbitModemStatus]) -> None:
+        """Send one aggregate alert when a completed round had any failure.
+
+        A round of pending IMEIs is a normal skip and stays silent. Containment
+        mirrors the Netcare daemon: a gateway fault is an alert problem, not a
+        reason for the scrape round to be recorded as failed.
+        """
+
+        failures = orbit_failures(statuses)
+        if not failures:
+            return
+        try:
+            self._alerts(SERVICE_ORBIT, failures, len(statuses))
+        except Exception as exc:
+            logger.warning("Orbit scrape failure alert could not be delivered: %s", exc)
 
 
 def build_orbit_daemon_from_settings(config: Settings | None = None) -> OrbitDaemon:
