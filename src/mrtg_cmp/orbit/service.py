@@ -12,6 +12,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from mrtg_cmp.orbit.burn_rate import QuotaBurnRateTracker, send_burn_alert
 from mrtg_cmp.orbit.cache import OrbitCache
 from mrtg_cmp.orbit.scraper import OrbitModemStatus, OrbitScraper
 from mrtg_cmp.orbit.targets import OrbitModem
@@ -220,6 +221,9 @@ class OrbitDaemon:
         self._streaks = streaks or FailureStreakTracker(
             cache.cache_file.parent / ALERT_STATE_FILENAME
         )
+        self._burn_tracker = QuotaBurnRateTracker(
+            cache.cache_file.parent / "burn_rate_history.json"
+        )
 
     def _sleep(self, seconds: int, stop_event: threading.Event | None = None) -> None:
         if self._sleeper is not None:
@@ -260,6 +264,7 @@ class OrbitDaemon:
                     len(statuses),
                 )
                 self._alert_on_failures(statuses)
+                self._alert_on_burn_rate(statuses)
             except Exception as exc:
                 logger.error("Orbit daemon round failed: %s", exc)
                 completed += 1
@@ -307,6 +312,24 @@ class OrbitDaemon:
             self._alerts(SERVICE_ORBIT, crossing, len(statuses))
         except Exception as exc:
             logger.warning("Orbit scrape failure alert could not be delivered: %s", exc)
+
+    def _alert_on_burn_rate(self, statuses: list[OrbitModemStatus]) -> None:
+        """Send WhatsApp alert for active modems that hit CRITICAL burn-rate."""
+        try:
+            self._burn_tracker.record_statuses(statuses)
+            pending = self._burn_tracker.critical_alerts_pending()
+            for result in pending:
+                try:
+                    send_burn_alert(result)
+                except Exception as exc:
+                    logger.warning(
+                        "Orbit burn rate alert could not be delivered for modem %s: %s",
+                        result.modem_no,
+                        exc,
+                    )
+            self._burn_tracker.mark_alerted(pending)
+        except Exception as exc:
+            logger.warning("Orbit burn rate evaluation failed: %s", exc)
 
 
 def build_orbit_daemon_from_settings(config: Settings | None = None) -> OrbitDaemon:

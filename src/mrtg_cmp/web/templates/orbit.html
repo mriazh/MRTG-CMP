@@ -189,6 +189,43 @@
     border-color: var(--primary);
 }
 
+/* Smart sorting toolbar (Phase 60) */
+.orbit-sort-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.orbit-sort-label {
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.orbit-sort-select {
+    background: transparent;
+    border: 1px solid var(--border-color);
+    color: var(--text-main);
+    padding: 0.32rem 0.7rem;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.orbit-sort-select:focus {
+    border-color: var(--primary);
+    outline: none;
+}
+
+.orbit-sort-toggle {
+    min-width: 3.4rem;
+}
+
 /* Card Grid */
 .orbit-card-grid {
     display: grid;
@@ -265,12 +302,6 @@
     background: rgba(107, 114, 128, 0.12);
     color: #4B5563;
     border: 1px solid rgba(107, 114, 128, 0.3);
-}
-
-.orbit-status-pill.ex-customer {
-    background: rgba(239, 68, 68, 0.12);
-    color: #DC2626;
-    border: 1px solid rgba(239, 68, 68, 0.3);
 }
 
 .orbit-status-pill.imei-pending {
@@ -413,8 +444,9 @@
     padding: 0.75rem 1.15rem;
     border-top: 1px solid var(--border-color);
     display: flex;
-    justify-content: flex-end;
+    justify-content: space-between;
     align-items: center;
+    gap: 0.5rem;
 }
 
 .btn-detail {
@@ -441,6 +473,84 @@
 .btn-detail:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+}
+
+.btn-orbit-edit,
+.btn-orbit-delete,
+#btn-orbit-add {
+    background: var(--primary);
+    border: 1px solid var(--primary);
+    color: #FFFFFF;
+    padding: 0.35rem 0.8rem;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.btn-orbit-edit:hover,
+.btn-orbit-delete:hover,
+#btn-orbit-add:hover {
+    filter: brightness(1.08);
+}
+
+.orbit-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    margin-top: 1.25rem;
+}
+
+.btn-orbit-danger {
+    background: #DC2626;
+    border: 1px solid #DC2626;
+    color: #FFFFFF;
+}
+
+.btn-orbit-danger:hover {
+    filter: brightness(1.08);
+}
+
+.orbit-form-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.85rem;
+    margin-top: 1rem;
+}
+
+.orbit-form-grid label {
+    display: block;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 0.3rem;
+}
+
+.orbit-form-grid input,
+.orbit-form-grid select {
+    width: 100%;
+    padding: 0.5rem 0.65rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-color);
+    color: var(--text-color);
+    font-size: 0.85rem;
+    box-sizing: border-box;
+}
+
+.orbit-form-error {
+    display: none;
+    margin-top: 0.85rem;
+    padding: 0.55rem 0.7rem;
+    border-radius: 6px;
+    background: rgba(220, 38, 38, 0.1);
+    border: 1px solid rgba(220, 38, 38, 0.3);
+    color: #DC2626;
+    font-size: 0.8rem;
 }
 
 /* Package Modal */
@@ -607,7 +717,13 @@
     <!-- Header Toolbar -->
     <div class="orbit-header-bar">
         <div class="orbit-title-group">
-            <h2>📡 Telkomsel Orbit Modem Monitoring</h2>
+            <h2>
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color: var(--primary); vertical-align: middle; margin-right: 0.35rem;">
+                    <circle cx="12" cy="12" r="2"></circle>
+                    <path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"></path>
+                </svg>
+                Telkomsel Orbit Modem Monitoring
+            </h2>
             <p class="orbit-subtitle">Multi-package quota monitoring, package validity, and Orbit modem inventory</p>
         </div>
         <div id="orbit-sync-status" role="status" aria-live="polite" style="display:none"></div>
@@ -616,6 +732,10 @@
                 <span class="status-dot up"></span>
                 Live scraping runs on demand; cache refresh: <span id="orbit-countdown-timer">180</span>s
             </span>
+            <button id="btn-orbit-add" class="btn-orbit-add" type="button" title="Add a new Orbit modem to the catalog">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align: -2px; margin-right: 0.35rem;"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                Add Modem
+            </button>
             <button id="btn-orbit-refresh-all" class="btn-sync" type="button" title="Refresh and synchronize all Orbit modems">
                 <svg class="sync-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
@@ -670,9 +790,18 @@
         <button class="orbit-pill" id="pill-filter-idle" data-filter="idle" type="button">
             Idle / Spare ({{ stats.idle }})
         </button>
-        <button class="orbit-pill" id="pill-filter-ex" data-filter="ex_customer" type="button">
-            Decommissioned ({{ stats.ex_customer }})
-        </button>
+    </div>
+
+    <!-- Phase 60: client-side sort toolbar -->
+    <div class="orbit-sort-bar" id="orbit-sort-bar">
+        <label class="orbit-sort-label" for="orbit-sort">Sort by</label>
+        <select class="orbit-sort-select" id="orbit-sort" aria-label="Sort modem cards by">
+            <option value="location" selected>Location</option>
+            <option value="modem-no">Modem No</option>
+            <option value="quota">Remaining Quota (Lowest First)</option>
+            <option value="status">Active Status</option>
+        </select>
+        <button class="orbit-pill orbit-sort-toggle" id="orbit-sort-dir" data-direction="asc" type="button" aria-label="Toggle sort direction">A&ndash;Z</button>
     </div>
 
     <!-- Modem Cards Grid -->
@@ -682,20 +811,18 @@
         {% set tot = m.total_quota_gb %}
         {% set pct = (rem / tot * 100) | round(1) if tot > 0 else 0.0 %}
         {% set fill_color = 'green' if pct >= 30 else ('amber' if pct >= 10 else 'red') %}
-        <div class="orbit-card" data-status="{{ m.target.status | lower }}" data-imei-valid="{{ 'true' if m.target.imei_valid else 'false' }}">
+        <div class="orbit-card" data-status="{{ m.target.status | lower }}" data-imei-valid="{{ 'true' if m.target.imei_valid else 'false' }}" data-modem-no="{{ m.target.no }}" data-location="{{ m.target.location }}" data-quota="{{ rem }}">
             <div class="orbit-card-header">
                 <div class="orbit-room-badge" title="{{ m.target.location }}">
-                    📍 {{ m.target.location }}
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-right: 0.25rem; vertical-align: -1px;"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>{{ m.target.location }}
                 </div>
                 <div>
                     {% if not m.target.imei_valid %}
-                        <span class="orbit-status-pill imei-pending" title="10-digit ID requires 15-digit IMEI">⚠️ IMEI Pending</span>
+                        <span class="orbit-status-pill imei-pending" title="10-digit ID requires 15-digit IMEI"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-right: 0.25rem; vertical-align: -1px;"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>IMEI Pending</span>
                     {% elif m.target.status == 'ACTIVE' %}
-                        <span class="orbit-status-pill active">🟢 Active</span>
+                        <span class="orbit-status-pill active"><span class="status-dot up" style="width: 7px; height: 7px; display: inline-block; border-radius: 50%; background-color: #22C55E; margin-right: 0.35rem; vertical-align: middle;"></span>Active</span>
                     {% elif m.target.status == 'IDLE' %}
-                        <span class="orbit-status-pill idle">⚪ IDLE</span>
-                    {% elif m.target.status == 'EX_CUSTOMER' %}
-                        <span class="orbit-status-pill ex-customer">🔴 Decommissioned</span>
+                        <span class="orbit-status-pill idle"><span class="status-dot idle" style="width: 7px; height: 7px; display: inline-block; border-radius: 50%; background-color: #94A3B8; margin-right: 0.35rem; vertical-align: middle;"></span>IDLE</span>
                     {% endif %}
                 </div>
             </div>
@@ -749,27 +876,42 @@
                 <div>
                     {% if not m.target.imei_valid %}
                         <span class="orbit-expiry-badge pending">
-                            ⚠️ IMEI Pending (15 digits required)
-                        </span>
-                    {% elif m.target.status == 'EX_CUSTOMER' %}
-                        <span class="orbit-expiry-badge inactive">
-                            🔴 Decommissioned / Inactive
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-right: 0.25rem; vertical-align: -1px;"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>IMEI Pending (15 digits required)
                         </span>
                     {% elif m.earliest_expiry_str and m.earliest_days_left is not none %}
                         {% set days = m.earliest_days_left %}
                         <span class="orbit-expiry-badge {% if days > 14 %}safe{% elif days > 3 %}soon{% else %}critical{% endif %}">
-                            ⏳ Earliest expiry: {{ m.earliest_expiry_str }} ({{ days }} days remaining)
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-right: 0.25rem; vertical-align: -1px;"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>Earliest expiry: {{ m.earliest_expiry_str }} ({{ days }} days remaining)
                         </span>
                     {% elif m.earliest_expiry_str %}
                         <span class="orbit-expiry-badge safe">
-                            ⏳ Earliest expiry: {{ m.earliest_expiry_str }}
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-right: 0.25rem; vertical-align: -1px;"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>Earliest expiry: {{ m.earliest_expiry_str }}
                         </span>
                     {% else %}
                         <span class="orbit-expiry-badge inactive">
-                            ⏳ Expiry not available
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-right: 0.25rem; vertical-align: -1px;"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>Expiry not available
                         </span>
                     {% endif %}
                 </div>
+
+                <!-- Quota Burn Rate & Forecast (FR-62) -->
+                {% set br = burn_results.get(m.target.imei) if burn_results else none %}
+                {% if br and br.burn_rate_gb_per_day is not none %}
+                <div class="orbit-burn-rate-row" style="margin-top: 0.65rem; padding: 0.5rem 0.65rem; border-radius: 6px; font-size: 0.78rem; display: flex; justify-content: space-between; align-items: center; background: {% if br.alert_level == 'CRITICAL' %}rgba(239,68,68,0.12){% elif br.alert_level == 'WARNING' %}rgba(245,158,11,0.12){% else %}rgba(59,130,246,0.08){% endif %}; border: 1px solid {% if br.alert_level == 'CRITICAL' %}rgba(239,68,68,0.3){% elif br.alert_level == 'WARNING' %}rgba(245,158,11,0.3){% else %}rgba(59,130,246,0.2){% endif %};">
+                    <span style="color: var(--text-muted);">
+                        ⚡ Burn: <strong style="color: var(--text-normal);">{{ br.burn_rate_gb_per_day }} GB/day</strong>
+                    </span>
+                    <span>
+                        {% if br.days_until_exhaustion is not none %}
+                            <span style="font-weight: 600; color: {% if br.alert_level == 'CRITICAL' %}#EF4444{% elif br.alert_level == 'WARNING' %}#F59E0B{% else %}#10B981{% endif %};">
+                                {% if br.alert_level == 'CRITICAL' %}CRITICAL · {% elif br.alert_level == 'WARNING' %}WARNING · {% endif %}~{{ br.days_until_exhaustion }}d left
+                            </span>
+                        {% else %}
+                            <span style="color: var(--text-muted);">Stable</span>
+                        {% endif %}
+                    </span>
+                </div>
+                {% endif %}
             </div>
 
             <div class="orbit-card-footer">
@@ -780,7 +922,27 @@
                     data-ssid="{{ m.target.ssid }}"
                     data-packages='{{ m.packages_json | e }}'
                     {% if not m.target.imei_valid or not m.packages %}disabled{% endif %}>
-                    📦 View Package Details ({{ m.packages | length }})
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-right: 0.35rem; vertical-align: -1px;"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>View Package Details ({{ m.packages | length }})
+                </button>
+                <button class="btn-orbit-edit" type="button"
+                    data-no="{{ m.target.no }}"
+                    data-imei="{{ m.target.imei }}"
+                    data-phone="{{ m.target.phone }}"
+                    data-location="{{ m.target.location }}"
+                    data-ssid="{{ m.target.ssid }}"
+                    data-status="{{ m.target.status }}"
+                    data-latitude="{{ m.target.latitude if m.target.latitude is not none else '' }}"
+                    data-longitude="{{ m.target.longitude if m.target.longitude is not none else '' }}"
+                    title="Edit modem {{ m.target.no }}">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-right: 0.35rem; vertical-align: -1px;"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
+                    Edit
+                </button>
+                <button class="btn-orbit-delete btn-orbit-danger" type="button"
+                    data-no="{{ m.target.no }}"
+                    data-location="{{ m.target.location }}"
+                    title="Delete modem {{ m.target.no }}">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-right: 0.35rem; vertical-align: -1px;"><path d="M3 6h18"></path><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                    Delete
                 </button>
             </div>
         </div>
@@ -793,7 +955,7 @@
     <div class="orbit-modal" role="document">
         <div class="orbit-modal-header">
             <div class="orbit-modal-title">
-                <span>📦</span>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color: var(--primary);"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
                 <span id="modal-title-text">Package Quota Details</span>
             </div>
             <button class="orbit-modal-close" id="btn-close-modal" type="button" aria-label="Close">&times;</button>
@@ -813,16 +975,98 @@
     </div>
 </div>
 
+<!-- Add / Edit Modem Modal -->
+<div class="orbit-modal-backdrop" id="orbit-edit-modal" aria-hidden="true" role="dialog">
+    <div class="orbit-modal" role="document">
+        <div class="orbit-modal-header">
+            <div class="orbit-modal-title">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color: var(--primary);"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
+                <span id="orbit-edit-modal-title">Add Modem</span>
+            </div>
+            <button class="orbit-modal-close" id="btn-close-orbit-edit" type="button" aria-label="Close">&times;</button>
+        </div>
+        <div class="orbit-modal-body">
+            <div class="orbit-form-grid">
+                <div>
+                    <label for="orbit-form-no">Modem Number</label>
+                    <input type="number" id="orbit-form-no" min="1" step="1" required>
+                </div>
+                <div>
+                    <label for="orbit-form-status">Status</label>
+                    <select id="orbit-form-status">
+                        <option value="ACTIVE">Active</option>
+                        <option value="IDLE">Idle / Spare</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="orbit-form-imei">IMEI (15 digits)</label>
+                    <input type="text" id="orbit-form-imei" maxlength="20" placeholder="860000000000013">
+                </div>
+                <div>
+                    <label for="orbit-form-phone">Phone Number</label>
+                    <input type="text" id="orbit-form-phone" placeholder="081200000013">
+                </div>
+                <div style="grid-column: span 2;">
+                    <label for="orbit-form-location">Location</label>
+                    <input type="text" id="orbit-form-location" required placeholder="Meeting Room Delta">
+                </div>
+                <div style="grid-column: span 2;">
+                    <label for="orbit-form-ssid">Modem SSID</label>
+                    <input type="text" id="orbit-form-ssid" placeholder="Orbit-Room-13">
+                </div>
+                <div>
+                    <label for="orbit-form-latitude">Latitude (optional)</label>
+                    <input type="number" id="orbit-form-latitude" step="any" placeholder="-6.200000">
+                </div>
+                <div>
+                    <label for="orbit-form-longitude">Longitude (optional)</label>
+                    <input type="number" id="orbit-form-longitude" step="any" placeholder="106.816666">
+                </div>
+            </div>
+            <div class="orbit-form-error" id="orbit-edit-error" role="alert"></div>
+            <div class="orbit-modal-actions">
+                <button class="btn-detail" id="btn-cancel-orbit-edit" type="button">Cancel</button>
+                <button class="btn-orbit-edit" id="btn-save-orbit-modem" type="button">Save Modem</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Delete Modem Confirmation Modal -->
+<div class="orbit-modal-backdrop" id="orbit-delete-modal" aria-hidden="true" role="dialog">
+    <div class="orbit-modal" role="document" style="max-width: 460px;">
+        <div class="orbit-modal-header">
+            <div class="orbit-modal-title">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color: #DC2626;"><path d="M3 6h18"></path><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                <span>Delete Modem</span>
+            </div>
+            <button class="orbit-modal-close" id="btn-close-orbit-delete" type="button" aria-label="Close">&times;</button>
+        </div>
+        <div class="orbit-modal-body">
+            <p id="orbit-delete-message" style="margin: 0; font-size: 0.9rem; color: var(--text-secondary);">
+                Delete this modem from the Orbit catalog? A timestamped backup is kept before the file is rewritten.
+            </p>
+            <div class="orbit-form-error" id="orbit-delete-error" role="alert"></div>
+            <div class="orbit-modal-actions">
+                <button class="btn-detail" id="btn-cancel-orbit-delete" type="button">Cancel</button>
+                <button class="btn-orbit-edit btn-orbit-danger" id="btn-confirm-orbit-delete" type="button">Delete Modem</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Notification Toast -->
 <div class="orbit-toast" id="orbit-toast">Syncing Orbit modem data...</div>
 
 <script>
 document.addEventListener('DOMContentLoaded', () => {
     // 1. Filter Pills
-    const filterPills = document.querySelectorAll('.orbit-pill');
+    // Scoped to the filter bar: the sort toggle below reuses the .orbit-pill
+    // look and must not be picked up as a status filter.
+    const filterPills = document.querySelectorAll('.orbit-filter-bar .orbit-pill');
 
     function applyActiveFilter() {
-        const activePill = document.querySelector('.orbit-pill.active');
+        const activePill = document.querySelector('.orbit-filter-bar .orbit-pill.active');
         const filter = activePill ? activePill.getAttribute('data-filter') : 'all';
         const cards = document.querySelectorAll('.orbit-card');
 
@@ -834,8 +1078,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 card.style.display = (status === 'active') ? '' : 'none';
             } else if (filter === 'idle') {
                 card.style.display = (status === 'idle') ? '' : 'none';
-            } else if (filter === 'ex_customer') {
-                card.style.display = (status === 'ex_customer') ? '' : 'none';
             }
         });
     }
@@ -847,6 +1089,66 @@ document.addEventListener('DOMContentLoaded', () => {
             applyActiveFilter();
         });
     });
+
+    // 1b. Smart Sort Toolbar (Phase 60)
+    const orbitSortSelect = document.getElementById('orbit-sort');
+    const orbitSortDir = document.getElementById('orbit-sort-dir');
+    const orbitGrid = document.getElementById('orbit-grid');
+
+    // Cards are reordered with appendChild rather than re-rendered, so the grid
+    // CSS and the delegated detail-button handler keep working. Cards hidden by
+    // the active status filter keep their display:none.
+    function applyOrbitSort() {
+        if (!orbitGrid || !orbitSortSelect) return;
+
+        const key = orbitSortSelect.value;
+        // "Lowest First" is the useful default for quota, so ascending is the
+        // natural direction for every key.
+        const ascending = orbitSortDir ? orbitSortDir.dataset.direction !== 'desc' : true;
+        const rank = {
+            location: card => String(card.getAttribute('data-location') || '').toLowerCase(),
+            'modem-no': card => Number(card.getAttribute('data-modem-no')) || 0,
+            quota: card => Number(card.getAttribute('data-quota')) || 0,
+            status: card => String(card.getAttribute('data-status') || '').toLowerCase(),
+        }[key];
+        if (!rank) return;
+
+        const sorted = Array.from(orbitGrid.querySelectorAll('.orbit-card')).sort((a, b) => {
+            const left = rank(a);
+            const right = rank(b);
+            const result = (typeof left === 'string' || typeof right === 'string')
+                ? String(left).localeCompare(String(right))
+                : left - right;
+            if (result !== 0) return result;
+            // Ties break on the modem number so the order is stable between
+            // polls instead of shuffling every 30 seconds.
+            return String(a.getAttribute('data-modem-no') || '')
+                .localeCompare(String(b.getAttribute('data-modem-no') || ''));
+        });
+
+        sorted.forEach(card => orbitGrid.appendChild(card));
+
+        if (orbitSortDir) {
+            orbitSortDir.textContent = ascending ? 'A\u2193' : 'Z\u2191';
+            orbitSortDir.setAttribute(
+                'aria-label',
+                ascending ? 'Sort descending' : 'Sort ascending',
+            );
+        }
+    }
+
+    if (orbitSortSelect) {
+        orbitSortSelect.addEventListener('change', applyOrbitSort);
+    }
+
+    if (orbitSortDir) {
+        orbitSortDir.addEventListener('click', () => {
+            orbitSortDir.dataset.direction = orbitSortDir.dataset.direction === 'desc'
+                ? 'asc'
+                : 'desc';
+            applyOrbitSort();
+        });
+    }
 
     // 2. Package Details Modal
     const backdrop = document.getElementById('orbit-modal-backdrop');
@@ -973,7 +1275,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         } catch (err) {
             console.error('Sync error', err);
-            showToast('❌ Network error during sync');
+            showToast('Network error during sync');
         } finally {
             if (btn) btn.classList.remove('loading');
         }
@@ -993,6 +1295,242 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
     window.triggerOrbitSync = triggerOrbitSync;
+
+    // 4. Add / Edit / Delete Modem (Phase 59)
+    const editModal = document.getElementById('orbit-edit-modal');
+    const deleteModal = document.getElementById('orbit-delete-modal');
+    const editModalTitle = document.getElementById('orbit-edit-modal-title');
+    const editErrorEl = document.getElementById('orbit-edit-error');
+    const deleteErrorEl = document.getElementById('orbit-delete-error');
+    const deleteMessageEl = document.getElementById('orbit-delete-message');
+    const saveBtn = document.getElementById('btn-save-orbit-modem');
+    const deleteBtn = document.getElementById('btn-confirm-orbit-delete');
+
+    let editingOriginalNo = null;
+    let pendingDeleteNo = null;
+
+    const formFields = {
+        no: document.getElementById('orbit-form-no'),
+        status: document.getElementById('orbit-form-status'),
+        imei: document.getElementById('orbit-form-imei'),
+        phone: document.getElementById('orbit-form-phone'),
+        location: document.getElementById('orbit-form-location'),
+        ssid: document.getElementById('orbit-form-ssid'),
+        latitude: document.getElementById('orbit-form-latitude'),
+        longitude: document.getElementById('orbit-form-longitude'),
+    };
+
+    function toggleModal(modal, open) {
+        if (!modal) return;
+        modal.classList.toggle('open', open);
+        modal.setAttribute('aria-hidden', open ? 'false' : 'true');
+    }
+
+    function setError(el, message) {
+        if (!el) return;
+        el.textContent = message || '';
+        el.style.display = message ? 'block' : 'none';
+    }
+
+    function openEditModal(btn) {
+        setError(editErrorEl, '');
+        if (btn) {
+            editingOriginalNo = parseInt(btn.getAttribute('data-no'), 10);
+            formFields.no.value = btn.getAttribute('data-no') || '';
+            formFields.status.value = btn.getAttribute('data-status') || 'ACTIVE';
+            formFields.imei.value = btn.getAttribute('data-imei') || '';
+            formFields.phone.value = btn.getAttribute('data-phone') || '';
+            formFields.location.value = btn.getAttribute('data-location') || '';
+            formFields.ssid.value = btn.getAttribute('data-ssid') || '';
+            formFields.latitude.value = btn.getAttribute('data-latitude') || '';
+            formFields.longitude.value = btn.getAttribute('data-longitude') || '';
+            if (editModalTitle) editModalTitle.textContent = `Edit Modem ${editingOriginalNo}`;
+        } else {
+            editingOriginalNo = null;
+            Object.values(formFields).forEach(field => { field.value = ''; });
+            if (formFields.status) formFields.status.value = 'ACTIVE';
+            if (editModalTitle) editModalTitle.textContent = 'Add Modem';
+        }
+        toggleModal(editModal, true);
+        if (formFields.no) formFields.no.focus();
+    }
+
+    function openDeleteModal(no, location) {
+        setError(deleteErrorEl, '');
+        pendingDeleteNo = no;
+        if (deleteMessageEl) {
+            deleteMessageEl.textContent = `Delete modem ${no}${location ? ` (${location})` : ''} from the Orbit catalog? `
+                + 'A timestamped backup is kept before the file is rewritten.';
+        }
+        toggleModal(deleteModal, true);
+    }
+
+    function closeEditModal() {
+        toggleModal(editModal, false);
+        editingOriginalNo = null;
+    }
+
+    function closeDeleteModal() {
+        toggleModal(deleteModal, false);
+        pendingDeleteNo = null;
+    }
+
+    function readFormPayload() {
+        const parseCoord = (raw) => {
+            if (raw === null || raw === undefined || String(raw).trim() === '') return null;
+            const parsed = Number(raw);
+            return Number.isFinite(parsed) ? parsed : 'invalid';
+        };
+        const no = parseInt(formFields.no.value, 10);
+        const latitude = parseCoord(formFields.latitude.value);
+        const longitude = parseCoord(formFields.longitude.value);
+
+        if (!Number.isInteger(no) || no < 1) {
+            return { error: 'Modem number must be a positive integer.' };
+        }
+        if (!formFields.location.value.trim()) {
+            return { error: 'Location cannot be empty.' };
+        }
+        if (latitude === 'invalid' || longitude === 'invalid') {
+            return { error: 'Latitude and longitude must be numeric values.' };
+        }
+
+        return {
+            payload: {
+                no: no,
+                imei: formFields.imei.value.trim(),
+                phone: formFields.phone.value.trim(),
+                location: formFields.location.value.trim(),
+                ssid: formFields.ssid.value.trim(),
+                status: formFields.status.value,
+                latitude: latitude,
+                longitude: longitude,
+            },
+        };
+    }
+
+    async function extractErrorDetail(resp) {
+        try {
+            const data = await resp.json();
+            return data.detail || `Request failed with status ${resp.status}`;
+        } catch (err) {
+            return `Request failed with status ${resp.status}`;
+        }
+    }
+
+    async function saveOrbitModem() {
+        setError(editErrorEl, '');
+        const parsed = readFormPayload();
+        if (parsed.error) {
+            setError(editErrorEl, parsed.error);
+            return;
+        }
+
+        const isUpdate = editingOriginalNo !== null;
+        const url = isUpdate ? `/api/orbit/modem/${editingOriginalNo}` : '/api/orbit/modem';
+        if (saveBtn) saveBtn.disabled = true;
+
+        try {
+            const resp = await fetch(url, {
+                method: isUpdate ? 'PUT' : 'POST',
+                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                body: JSON.stringify(parsed.payload),
+            });
+            if (!resp.ok) {
+                setError(editErrorEl, await extractErrorDetail(resp));
+                return;
+            }
+            closeEditModal();
+            showToast(isUpdate ? 'Modem updated' : 'Modem added');
+            await refreshOrbitModems();
+        } catch (err) {
+            console.error('Orbit modem save error', err);
+            setError(editErrorEl, 'Network error while saving the modem.');
+        } finally {
+            if (saveBtn) saveBtn.disabled = false;
+        }
+    }
+
+    async function confirmOrbitDelete() {
+        setError(deleteErrorEl, '');
+        if (pendingDeleteNo === null) {
+            setError(deleteErrorEl, 'No modem selected for deletion.');
+            return;
+        }
+        if (deleteBtn) deleteBtn.disabled = true;
+
+        try {
+            const resp = await fetch(`/api/orbit/modem/${pendingDeleteNo}`, {
+                method: 'DELETE',
+                headers: { 'Accept': 'application/json' },
+            });
+            if (!resp.ok) {
+                setError(deleteErrorEl, await extractErrorDetail(resp));
+                return;
+            }
+            closeDeleteModal();
+            showToast('Modem deleted');
+            await refreshOrbitModems();
+        } catch (err) {
+            console.error('Orbit modem delete error', err);
+            setError(deleteErrorEl, 'Network error while deleting the modem.');
+        } finally {
+            if (deleteBtn) deleteBtn.disabled = false;
+        }
+    }
+
+    const addBtn = document.getElementById('btn-orbit-add');
+    if (addBtn) addBtn.addEventListener('click', () => openEditModal(null));
+
+    ['btn-close-orbit-edit', 'btn-cancel-orbit-edit'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('click', closeEditModal);
+    });
+    ['btn-close-orbit-delete', 'btn-cancel-orbit-delete'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('click', closeDeleteModal);
+    });
+    if (saveBtn) saveBtn.addEventListener('click', saveOrbitModem);
+    if (deleteBtn) deleteBtn.addEventListener('click', confirmOrbitDelete);
+
+    [editModal, deleteModal].forEach(modal => {
+        if (modal) {
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) {
+                    if (modal === editModal) closeEditModal();
+                    else closeDeleteModal();
+                }
+            });
+        }
+    });
+
+    if (gridContainer) {
+        gridContainer.addEventListener('click', (e) => {
+            const editBtnEl = e.target.closest('.btn-orbit-edit');
+            if (editBtnEl) {
+                e.preventDefault();
+                openEditModal(editBtnEl);
+                return;
+            }
+            const deleteBtnEl = e.target.closest('.btn-orbit-delete');
+            if (deleteBtnEl) {
+                e.preventDefault();
+                openDeleteModal(
+                    parseInt(deleteBtnEl.getAttribute('data-no'), 10),
+                    deleteBtnEl.getAttribute('data-location') || ''
+                );
+            }
+        });
+    }
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        if (editModal && editModal.classList.contains('open')) {
+            closeEditModal();
+        } else if (deleteModal && deleteModal.classList.contains('open')) {
+            closeDeleteModal();
+        }
+    });
 
     // 4. Auto-refresh & Countdown (Phase 40)
         const ORBIT_POLL_SECONDS = 300;
@@ -1026,9 +1564,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     soonEl.textContent = data.summary.expiring_soon_count;
                     soonEl.style.color = data.summary.expiring_soon_count > 0 ? '#F59E0B' : 'var(--primary)';
                 }
-                if (imeEl) {
-                    imeEl.textContent = data.summary.imei_pending_count;
-                    imeEl.style.color = data.summary.imei_pending_count > 0 ? '#DC2626' : 'var(--primary)';
+                if (imeiEl) {
+                    imeiEl.textContent = data.summary.imei_pending_count;
+                    imeiEl.style.color = data.summary.imei_pending_count > 0 ? '#DC2626' : 'var(--primary)';
                 }
             }
 
@@ -1037,18 +1575,33 @@ document.addEventListener('DOMContentLoaded', () => {
                 const pAll = document.getElementById('pill-filter-all');
                 const pActive = document.getElementById('pill-filter-active');
                 const pIdle = document.getElementById('pill-filter-idle');
-                const pEx = document.getElementById('pill-filter-ex');
 
                 if (pAll) pAll.textContent = `All Modems (${data.stats.all})`;
                 if (pActive) pActive.textContent = `Active in Room (${data.stats.active})`;
                 if (pIdle) pIdle.textContent = `Idle / Spare (${data.stats.idle})`;
-                if (pEx) pEx.textContent = `Decommissioned (${data.stats.ex_customer})`;
             }
 
             // Update Cards in DOM
             if (data.modems && gridContainer) {
-                const activePill = document.querySelector('.orbit-pill.active');
+                const activePill = document.querySelector('.orbit-filter-bar .orbit-pill.active');
                 const activeFilter = activePill ? activePill.getAttribute('data-filter') : 'all';
+
+                const svgWarn = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-right: 0.25rem; vertical-align: -1px;"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>';
+                const svgClock = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-right: 0.25rem; vertical-align: -1px;"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>';
+                const svgPin = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-right: 0.25rem; vertical-align: -1px;"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>';
+                const svgPackage = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-right: 0.35rem; vertical-align: -1px;"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>';
+                const svgEdit = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-right: 0.35rem; vertical-align: -1px;"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>';
+                const svgTrash = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-right: 0.35rem; vertical-align: -1px;"><path d="M3 6h18"></path><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>';
+
+                function escapeAttr(value) {
+                    if (value === null || value === undefined) return '';
+                    return String(value)
+                        .replace(/&/g, '&amp;')
+                        .replace(/"/g, '&quot;')
+                        .replace(/'/g, '&#39;')
+                        .replace(/</g, '&lt;')
+                        .replace(/>/g, '&gt;');
+                }
 
                 gridContainer.innerHTML = data.modems.map(m => {
                     const target = m.target;
@@ -1060,19 +1613,16 @@ document.addEventListener('DOMContentLoaded', () => {
                     const pctColor = pctNum >= 30 ? '#10B981' : (pctNum >= 10 ? '#F59E0B' : '#EF4444');
                     const isVisible = (activeFilter === 'all') ||
                         (activeFilter === 'active' && target.status.toLowerCase() === 'active') ||
-                        (activeFilter === 'idle' && target.status.toLowerCase() === 'idle') ||
-                        (activeFilter === 'ex_customer' && target.status.toLowerCase() === 'ex_customer');
+                        (activeFilter === 'idle' && target.status.toLowerCase() === 'idle');
                     const displayStyle = isVisible ? '' : 'style="display: none;"';
 
                     let statusBadge = '';
                     if (!target.imei_valid) {
-                        statusBadge = '<span class="orbit-status-pill imei-pending" title="10-digit ID requires 15-digit IMEI">⚠️ IMEI Pending</span>';
+                        statusBadge = `<span class="orbit-status-pill imei-pending" title="10-digit ID requires 15-digit IMEI">${svgWarn}IMEI Pending</span>`;
                     } else if (target.status === 'ACTIVE') {
-                        statusBadge = '<span class="orbit-status-pill active">🟢 Active</span>';
+                        statusBadge = '<span class="orbit-status-pill active"><span class="status-dot up" style="width: 7px; height: 7px; display: inline-block; border-radius: 50%; background-color: #22C55E; margin-right: 0.35rem; vertical-align: middle;"></span>Active</span>';
                     } else if (target.status === 'IDLE') {
-                        statusBadge = '<span class="orbit-status-pill idle">⚪ IDLE</span>';
-                    } else if (target.status === 'EX_CUSTOMER') {
-                        statusBadge = '<span class="orbit-status-pill ex-customer">🔴 Decommissioned</span>';
+                        statusBadge = '<span class="orbit-status-pill idle"><span class="status-dot idle" style="width: 7px; height: 7px; display: inline-block; border-radius: 50%; background-color: #94A3B8; margin-right: 0.35rem; vertical-align: middle;"></span>IDLE</span>';
                     }
 
                     let quotaPctText = '-';
@@ -1093,27 +1643,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     let expiryBadgeHtml = '';
                     if (!target.imei_valid) {
-                        expiryBadgeHtml = '<span class="orbit-expiry-badge pending">⚠️ IMEI Pending (15 digits required)</span>';
-                    } else if (target.status === 'EX_CUSTOMER') {
-                        expiryBadgeHtml = '<span class="orbit-expiry-badge inactive">🔴 Decommissioned / Inactive</span>';
+                        expiryBadgeHtml = `<span class="orbit-expiry-badge pending">${svgWarn}IMEI Pending (15 digits required)</span>`;
                     } else if (m.earliest_expiry_str && m.earliest_days_left !== null && m.earliest_days_left !== undefined) {
                         const days = m.earliest_days_left;
                         const badgeClass = days > 14 ? 'safe' : (days > 3 ? 'soon' : 'critical');
-                        expiryBadgeHtml = `<span class="orbit-expiry-badge ${badgeClass}">⏳ Earliest expiry: ${m.earliest_expiry_str} (${days} days remaining)</span>`;
+                        expiryBadgeHtml = `<span class="orbit-expiry-badge ${badgeClass}">${svgClock}Earliest expiry: ${m.earliest_expiry_str} (${days} days remaining)</span>`;
                     } else if (m.earliest_expiry_str) {
-                        expiryBadgeHtml = `<span class="orbit-expiry-badge safe">⏳ Earliest expiry: ${m.earliest_expiry_str}</span>`;
+                        expiryBadgeHtml = `<span class="orbit-expiry-badge safe">${svgClock}Earliest expiry: ${m.earliest_expiry_str}</span>`;
                     } else {
-                        expiryBadgeHtml = '<span class="orbit-expiry-badge inactive">⏳ Expiry not available</span>';
+                        expiryBadgeHtml = `<span class="orbit-expiry-badge inactive">${svgClock}Expiry not available</span>`;
                     }
 
                     const pkgsJson = JSON.stringify(m.packages || []).replace(/"/g, '&quot;');
                     const detailDisabled = (!target.imei_valid || !m.packages || m.packages.length === 0) ? 'disabled' : '';
 
                     return `
-                    <div class="orbit-card" data-status="${target.status.toLowerCase()}" data-imei-valid="${target.imei_valid ? 'true' : 'false'}" ${displayStyle}>
+                    <div class="orbit-card" data-status="${target.status.toLowerCase()}" data-imei-valid="${target.imei_valid ? 'true' : 'false'}" data-modem-no="${target.no}" data-location="${escapeAttr(target.location)}" data-quota="${rem}" ${displayStyle}>
                         <div class="orbit-card-header">
                             <div class="orbit-room-badge" title="${target.location}">
-                                📍 ${target.location}
+                                ${svgPin}${target.location}
                             </div>
                             <div>${statusBadge}</div>
                         </div>
@@ -1157,11 +1705,34 @@ document.addEventListener('DOMContentLoaded', () => {
                                 data-ssid="${target.ssid}"
                                 data-packages="${pkgsJson}"
                                 ${detailDisabled}>
-                                📦 View Package Details (${m.packages ? m.packages.length : 0})
+                                ${svgPackage}View Package Details (${m.packages ? m.packages.length : 0})
+                            </button>
+                            <button class="btn-orbit-edit" type="button"
+                                data-no="${target.no}"
+                                data-imei="${escapeAttr(target.imei)}"
+                                data-phone="${escapeAttr(target.phone)}"
+                                data-location="${escapeAttr(target.location)}"
+                                data-ssid="${escapeAttr(target.ssid)}"
+                                data-status="${target.status}"
+                                data-latitude="${target.latitude === null || target.latitude === undefined ? '' : target.latitude}"
+                                data-longitude="${target.longitude === null || target.longitude === undefined ? '' : target.longitude}"
+                                title="Edit modem ${target.no}">
+                                ${svgEdit}Edit
+                            </button>
+                            <button class="btn-orbit-delete btn-orbit-danger" type="button"
+                                data-no="${target.no}"
+                                data-location="${escapeAttr(target.location)}"
+                                title="Delete modem ${target.no}">
+                                ${svgTrash}Delete
                             </button>
                         </div>
                     </div>`;
                 }).join('');
+
+                // The poll replaced the grid contents, so the operator's chosen
+                // sort has to be re-applied or the cards silently snap back to
+                // catalog order every refresh.
+                applyOrbitSort();
             }
         } catch (err) {
             console.error('Failed refreshing Orbit modems:', err);

@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" fill="none">
+    <defs>
+        <linearGradient id="cmp-bg" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stop-color="#1F497D"/>
+            <stop offset="100%" stop-color="#0F172A"/>
+        </linearGradient>
+    </defs>
+    <!-- Background rounded container -->
+    <rect width="32" height="32" rx="7" fill="url(#cmp-bg)" stroke="#38BDF8" stroke-width="1.2" stroke-opacity="0.45"/>
+    
+    <!-- Telemetry background grid ticks -->
+    <line x1="4" y1="16" x2="28" y2="16" stroke="#38BDF8" stroke-width="0.75" stroke-opacity="0.2" stroke-dasharray="2 2"/>
+    <line x1="16" y1="4" x2="16" y2="28" stroke="#38BDF8" stroke-width="0.75" stroke-opacity="0.2" stroke-dasharray="2 2"/>
+
+    <!-- Signal Pulse Trace -->
+    <path d="M4 16h5l2.5-6 3.5 12 3-8 2.5 2H28" stroke="#38BDF8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- Network Telemetry Nodes -->
+    <circle cx="9" cy="16" r="1.5" fill="#FFFFFF"/>
+    <circle cx="11.5" cy="10" r="2" fill="#FFFFFF" stroke="#1F497D" stroke-width="0.75"/>
+    <circle cx="15" cy="22" r="1.5" fill="#FFFFFF"/>
+    <circle cx="18" cy="14" r="1.5" fill="#FFFFFF"/>
+    <circle cx="20.5" cy="16" r="1.75" fill="#38BDF8" stroke="#FFFFFF" stroke-width="0.75"/>
+</svg>

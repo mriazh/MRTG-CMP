@@ -119,6 +119,8 @@ class OrbitModemStatus:
             ssid=str(target_dict.get("ssid", "")),
             status=str(target_dict.get("status", "ACTIVE")),
             imei_valid=bool(target_dict.get("imei_valid", False)),
+            latitude=target_dict.get("latitude"),
+            longitude=target_dict.get("longitude"),
         )
         packages = [
             OrbitPackage.from_dict(p)

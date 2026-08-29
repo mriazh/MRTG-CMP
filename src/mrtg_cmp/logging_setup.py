@@ -21,7 +21,7 @@ import sys
 from dataclasses import dataclass
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import TextIO
+from typing import Any, TextIO
 
 #: One line, one format, on every destination: ``2026-09-29 14:03:21 [INFO] name: msg``.
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
@@ -205,6 +205,11 @@ def configure_logging(
     return effective
 
 
+def audit_log(action: str, user: str, details: str | dict[str, Any]) -> None:
+    """Record an administrative audit event at INFO level."""
+    logger.info("[AUDIT] user=%s action=%s %s", user, action, details)
+
+
 __all__ = [
     "BACKUP_COUNT",
     "DEFAULT_LOG_FILE",
@@ -212,6 +217,7 @@ __all__ = [
     "LOG_FORMAT",
     "MAX_LOG_BYTES",
     "NOISY_LOGGERS",
+    "audit_log",
     "configure_logging",
     "quiet_noisy_loggers",
 ]

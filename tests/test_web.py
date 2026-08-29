@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import html
+import json
 import re
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 from starlette.testclient import TestClient
@@ -29,6 +31,8 @@ def test_login_page_renders(client_with_db: TestClient) -> None:
     assert '<nav class="nav-tabs"' not in resp.text
     assert 'href="/orbit"' not in resp.text
     assert 'href="/console"' not in resp.text
+    assert 'href="/logs"' not in resp.text
+    assert '<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">' in resp.text
 
 def test_dashboard_unauthenticated_redirects(client_with_db: TestClient) -> None:
     """Unauthenticated browser request to / redirects to /login."""
@@ -784,18 +788,21 @@ def test_dashboard_uses_three_minute_refresh(client_with_db: TestClient) -> None
     assert "default(180)" in (TEMPLATES_DIR / "dashboard.html").read_text(encoding="utf-8")
 
 def test_navbar_links_cover_mrtg_orbit_and_console(client_with_db: TestClient) -> None:
-    """FR-13.4: navigation exposes clean MRTG Monitoring, Telkomsel Orbit, and Web Console tabs.
+    """Navigation exposes standardized Dashboard MRTG, Orbit, Console, and Logs tabs.
 
     Verifies navigation hygiene:
     - nav-tabs is rendered with clean labels (no raw emojis)
     - redundant Dashboard and Console action buttons are removed from nav-actions
     - unauthenticated views (e.g. /login) do not render nav-tabs
+    - favicon.svg is linked in <head>
     """
     # 1. Unauthenticated GET /login has no nav-tabs
     login_page = client_with_db.get("/login")
     assert '<nav class="nav-tabs"' not in login_page.text
     assert 'href="/orbit"' not in login_page.text
     assert 'href="/console"' not in login_page.text
+    assert 'href="/logs"' not in login_page.text
+    assert '<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">' in login_page.text
 
     # 2. Authenticated GET / has clean nav-tabs and no redundant buttons
     login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
@@ -806,14 +813,14 @@ def test_navbar_links_cover_mrtg_orbit_and_console(client_with_db: TestClient) -
     assert 'href="/"' in resp.text
     assert 'href="/orbit"' in resp.text
     assert 'href="/console"' in resp.text
+    assert 'href="/logs"' in resp.text
 
-    # Clean text without cheesy emojis in nav-tabs
-    assert "MRTG Monitoring" in resp.text
-    assert "Telkomsel Orbit" in resp.text
-    assert "Web Console" in resp.text
-    assert "📊 MRTG Monitoring" not in resp.text
-    assert "📡 Telkomsel Orbit" not in resp.text
-    assert "💻 Web Console" not in resp.text
+    # Clean text without cheesy emojis in nav-tabs, exactly matching standard names
+    assert "Dashboard MRTG" in resp.text
+    assert "Orbit" in resp.text
+    assert "Console" in resp.text
+    assert "Logs" in resp.text
+    assert '<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">' in resp.text
 
     # Redundant action buttons must NOT be present
     assert "📊 Dashboard" not in resp.text
@@ -825,8 +832,25 @@ def test_navbar_links_cover_mrtg_orbit_and_console(client_with_db: TestClient) -
     nav_actions_html = nav_actions_match.group(1)
     assert 'href="/"' not in nav_actions_html
     assert 'href="/console"' not in nav_actions_html
+    assert 'href="/logs"' not in nav_actions_html
     assert 'id="theme-toggle"' in nav_actions_html
     assert 'href="/logout"' in nav_actions_html
+
+
+def test_logs_route_renders_view(client_with_db: TestClient) -> None:
+    """GET /logs is an authenticated view for system logs."""
+    unauth = client_with_db.get("/logs", headers={"Accept": "text/html"})
+    assert unauth.status_code in (302, 303, 307)
+    assert "/login" in unauth.headers.get("location", "")
+
+    login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
+    resp = client_with_db.get("/logs", cookies=login_resp.cookies)
+
+    assert resp.status_code == 200
+    assert "System &amp; Service Logs" in resp.text or "System & Service Logs" in resp.text
+    assert '<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">' in resp.text
+    assert 'href="/logs"' in resp.text
+    assert "nav-tab active" in resp.text
 
 def test_console_page_and_endpoints(client_with_db: TestClient) -> None:
     """GET /console renders terminal UI and API endpoints enforce auth and validation."""
@@ -1728,7 +1752,9 @@ def test_region_and_service_filters_combine_rather_than_replace_each_other() -> 
     assert "function applyNetcareFilters()" in script
     match = re.search(
         r"const regionMatch = [^;]*;.*?const serviceMatch = [^;]*;.*?"
-        r"const match = regionMatch && serviceMatch;",
+        # Phase 60 added a third axis; the two original ones must still both be
+        # required, or picking a region would stop honouring the service pill.
+        r"const match = regionMatch && serviceMatch && quickMatch;",
         script,
         re.DOTALL,
     )
@@ -1936,3 +1962,862 @@ def test_dashboard_template_wan_refresh_button() -> None:
     assert 'id="btn-refresh-all"' in template
     assert '<button type="button" id="btn-refresh-all" class="btn btn-secondary"' in template
     assert 'style="padding: 0.35rem 0.7rem; font-size: 0.78rem;">Refresh</button>' in template
+
+
+# ---------------------------------------------------------------------------
+# Phase 57: Centralized System Logs Viewer Page (/logs) & Audit Logging
+# ---------------------------------------------------------------------------
+
+
+def test_logs_page_renders_with_terminal_container(client_with_db: TestClient) -> None:
+    """GET /logs renders the High-End NOC logs viewer page for authenticated user."""
+    login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
+    resp = client_with_db.get("/logs", cookies=login_resp.cookies)
+
+    assert resp.status_code == 200
+    assert "System Logs" in resp.text
+    assert "Real-time daemon records and administrative audit trail" in resp.text
+    assert 'id="logs-terminal"' in resp.text
+    assert 'class="terminal-viewer"' in resp.text
+    assert 'class="level-pills"' in resp.text
+    assert 'data-level="ALL"' in resp.text
+    assert 'data-level="INFO"' in resp.text
+    assert 'data-level="WARNING"' in resp.text
+    assert 'data-level="ERROR"' in resp.text
+    assert 'id="log-search-input"' in resp.text
+    assert 'id="log-search-clear"' in resp.text
+    assert 'id="log-lines-select"' in resp.text
+    assert 'id="auto-refresh-toggle"' in resp.text
+    assert "Live: 5s" in resp.text
+    assert 'id="btn-refresh-logs"' in resp.text
+    assert 'id="btn-download-logs"' in resp.text
+    assert 'id="btn-copy-logs"' in resp.text
+    assert 'id="logs-empty-state"' in resp.text
+    # Nav tab active state
+    assert '<a href="/logs" class="nav-tab active">Logs</a>' in resp.text
+
+
+def test_logs_endpoints_reject_unauthenticated(client_with_db: TestClient) -> None:
+    """Unauthenticated requests to /logs and /api/logs/* are rejected or redirected."""
+    # HTML view redirects to /login
+    html_resp = client_with_db.get("/logs", headers={"Accept": "text/html"})
+    assert html_resp.status_code in (302, 303, 307)
+    assert "/login" in html_resp.headers.get("location", "")
+
+    # API endpoints return 401 Unauthorized
+    tail_resp = client_with_db.get("/api/logs/tail")
+    assert tail_resp.status_code == 401
+
+    dl_resp = client_with_db.get("/api/logs/download")
+    assert dl_resp.status_code == 401
+
+
+def test_api_logs_tail_returns_lines_and_filters(
+    client_with_db: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /api/logs/tail returns lines, respects lines, level, and search filters."""
+    log_file = tmp_path / "mrtg-cmp.log"
+    log_file.write_text(
+        "2026-10-07 10:00:00 [INFO] test.collector: Started telemetry daemon\n"
+        "2026-10-07 10:01:00 [WARNING] test.netcare: Captcha attempt delayed\n"
+        "2026-10-07 10:02:00 [ERROR] test.routeros: Connection refused on port 8728\n"
+        "2026-10-07 10:03:00 [INFO] test.audit: [AUDIT] user=admin action=login success\n"
+        "2026-10-07 10:04:00 [INFO] test.collector: WAN throughput 125.4 Mbps\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(settings, "log_file", log_file)
+
+    login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
+    cookies = login_resp.cookies
+
+    # Default tail (level=ALL)
+    resp = client_with_db.get("/api/logs/tail", cookies=cookies)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_count"] == 5
+    assert len(data["lines"]) == 5
+    assert data["log_file"] == str(log_file)
+    assert "Started telemetry daemon" in data["lines"][0]
+
+    # Filter level=WARNING
+    resp_warn = client_with_db.get("/api/logs/tail?level=WARNING", cookies=cookies)
+    assert resp_warn.status_code == 200
+    data_warn = resp_warn.json()
+    assert data_warn["total_count"] == 1
+    assert "[WARNING]" in data_warn["lines"][0]
+    assert "Captcha attempt delayed" in data_warn["lines"][0]
+
+    # Filter level=ERROR
+    resp_err = client_with_db.get("/api/logs/tail?level=ERROR", cookies=cookies)
+    assert resp_err.status_code == 200
+    data_err = resp_err.json()
+    assert data_err["total_count"] == 1
+    assert "[ERROR]" in data_err["lines"][0]
+    assert "Connection refused" in data_err["lines"][0]
+
+    # Filter level=INFO
+    resp_info = client_with_db.get("/api/logs/tail?level=INFO", cookies=cookies)
+    assert resp_info.status_code == 200
+    data_info = resp_info.json()
+    assert data_info["total_count"] == 3
+    for line in data_info["lines"]:
+        assert "[INFO]" in line
+
+    # Filter search (case-insensitive)
+    resp_search = client_with_db.get("/api/logs/tail?search=routeros", cookies=cookies)
+    assert resp_search.status_code == 200
+    data_search = resp_search.json()
+    assert data_search["total_count"] == 1
+    assert "Connection refused" in data_search["lines"][0]
+
+    # Filter search for audit
+    resp_audit = client_with_db.get("/api/logs/tail?search=AUDIT", cookies=cookies)
+    assert resp_audit.status_code == 200
+    data_audit = resp_audit.json()
+    assert data_audit["total_count"] == 1
+    assert "[AUDIT] user=admin" in data_audit["lines"][0]
+
+    # Lines count limit
+    resp_limit = client_with_db.get("/api/logs/tail?lines=10", cookies=cookies)
+    assert resp_limit.status_code == 200
+    assert resp_limit.json()["total_count"] == 5
+
+
+def test_api_logs_tail_missing_file_returns_empty(
+    client_with_db: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /api/logs/tail returns empty list safely when log file does not exist."""
+    missing = tmp_path / "does_not_exist.log"
+    monkeypatch.setattr(settings, "log_file", missing)
+
+    login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
+    resp = client_with_db.get("/api/logs/tail", cookies=login_resp.cookies)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["lines"] == []
+    assert data["total_count"] == 0
+    assert data["log_file"] == str(missing)
+
+
+def test_api_logs_download_returns_attachment(
+    client_with_db: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /api/logs/download returns text/plain attachment with file contents."""
+    log_file = tmp_path / "mrtg-cmp.log"
+    content = "2026-10-07 12:00:00 [INFO] test: test download log line\n"
+    log_file.write_bytes(content.encode("utf-8"))
+    monkeypatch.setattr(settings, "log_file", log_file)
+
+    login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
+    resp = client_with_db.get("/api/logs/download", cookies=login_resp.cookies)
+
+    assert resp.status_code == 200
+    assert "text/plain" in resp.headers.get("content-type", "")
+    content_disposition = resp.headers.get("content-disposition", "")
+    assert "attachment" in content_disposition
+    assert "mrtg-cmp.log" in content_disposition
+    assert resp.text.replace("\r\n", "\n") == content.replace("\r\n", "\n")
+
+
+def test_audit_log_helper(isolated_log_file: Path) -> None:
+    """audit_log writes structured [AUDIT] record with action, user, and details."""
+    from mrtg_cmp.logging_setup import audit_log, configure_logging
+
+    configure_logging(isolated_log_file)
+    audit_log(action="test_action", user="operator", details={"resource": "wan1"})
+
+    assert isolated_log_file.is_file()
+    text = isolated_log_file.read_text(encoding="utf-8")
+    assert "[INFO]" in text
+    assert "[AUDIT]" in text
+    assert "user=operator" in text
+    assert "action=test_action" in text
+    assert "{'resource': 'wan1'}" in text
+
+
+def test_api_netcare_targets_crud_unauthorized(client_with_db: TestClient) -> None:
+    """Unauthenticated requests to Netcare CRUD endpoints must be rejected with 401."""
+    unauth_payload = {"target": "t1", "type": "SID", "name": "N", "region": "CGK"}
+    assert client_with_db.post("/api/netcare/targets", json=unauth_payload).status_code == 401
+    assert client_with_db.put("/api/netcare/targets/t1", json=unauth_payload).status_code == 401
+    assert client_with_db.delete("/api/netcare/targets/t1").status_code == 401
+
+
+def test_api_netcare_targets_crud_flow(
+    client_with_db: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_log_file: Path,
+) -> None:
+    """Full lifecycle: create target, update target, delete target, and verify audit logs."""
+    from mrtg_cmp.logging_setup import configure_logging
+
+    configure_logging(isolated_log_file)
+    catalog_path = tmp_path / "config" / "netcare_targets.csv"
+    monkeypatch.setattr(settings, "netcare_catalog_file", str(catalog_path))
+
+    login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
+    cookies = login_resp.cookies
+
+    # 1. POST (Create)
+    create_payload = {
+        "target": "netcare-crud-1",
+        "type": "SID",
+        "name": "Branch Test CRUD",
+        "address": "Jl. Sudirman 10",
+        "region": "CGK",
+        "service_type": "Astinet",
+        "ocr_enabled": True,
+        "latitude": -6.2088,
+        "longitude": 106.8456,
+    }
+    create_resp = client_with_db.post("/api/netcare/targets", json=create_payload, cookies=cookies)
+    assert create_resp.status_code == 200
+    created = create_resp.json()
+    assert created["target"] == "netcare-crud-1"
+    assert created["name"] == "Branch Test CRUD"
+    assert created["latitude"] == -6.2088
+    assert created["longitude"] == 106.8456
+
+    # Duplicate target ID rejected with 400
+    dup_resp = client_with_db.post("/api/netcare/targets", json=create_payload, cookies=cookies)
+    assert dup_resp.status_code == 400
+
+    # Invalid type rejected with 400
+    invalid_type_payload = dict(create_payload, target="netcare-crud-2", type="INVALID_TYPE")
+    inv_resp = client_with_db.post(
+        "/api/netcare/targets", json=invalid_type_payload, cookies=cookies
+    )
+    assert inv_resp.status_code == 400
+
+    # 2. PUT (Update)
+    update_payload = {
+        "target": "netcare-crud-1",
+        "type": "Graph-title",
+        "name": "Branch Test CRUD Updated",
+        "address": "Jl. Thamrin 20",
+        "region": "SUB",
+        "service_type": "Metro-E",
+        "ocr_enabled": False,
+        "latitude": -7.2575,
+        "longitude": 112.7521,
+    }
+    update_resp = client_with_db.put(
+        "/api/netcare/targets/netcare-crud-1", json=update_payload, cookies=cookies
+    )
+    assert update_resp.status_code == 200
+    updated = update_resp.json()
+    assert updated["type"] == "Graph-title"
+    assert updated["name"] == "Branch Test CRUD Updated"
+    assert updated["region"] == "SUB"
+    assert updated["latitude"] == -7.2575
+    assert updated["ocr_enabled"] is False
+
+    # PUT to non-existent target returns 404
+    non_existent_resp = client_with_db.put(
+        "/api/netcare/targets/non-existent", json=update_payload, cookies=cookies
+    )
+    assert non_existent_resp.status_code == 404
+
+    # 3. DELETE (Delete)
+    del_resp = client_with_db.delete("/api/netcare/targets/netcare-crud-1", cookies=cookies)
+    assert del_resp.status_code == 200
+    assert del_resp.json() == {"status": "deleted", "target": "netcare-crud-1"}
+
+    # DELETE second time returns 404
+    del2_resp = client_with_db.delete("/api/netcare/targets/netcare-crud-1", cookies=cookies)
+    assert del2_resp.status_code == 404
+
+    # 4. Verify audit logs
+    log_text = isolated_log_file.read_text(encoding="utf-8")
+    assert "NETCARE_CREATE" in log_text
+    assert "created target netcare-crud-1" in log_text
+    assert "NETCARE_UPDATE" in log_text
+    assert "updated target netcare-crud-1" in log_text
+    assert "NETCARE_DELETE" in log_text
+    assert "deleted target netcare-crud-1" in log_text
+
+
+def test_dashboard_renders_netcare_crud_ui_elements(
+    client_with_db: TestClient,
+) -> None:
+    """Dashboard HTML must render the Add button, Edit button, and Modals."""
+    login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
+    resp = client_with_db.get("/", cookies=login_resp.cookies)
+    assert resp.status_code == 200
+    html = resp.text
+
+    assert 'id="btn-netcare-add"' in html
+    assert 'class="btn-netcare-edit"' in html
+    assert 'id="netcare-edit-modal"' in html
+    assert 'id="netcare-delete-modal"' in html
+    assert 'id="netcare-toast"' in html
+    assert "Save Link" in html
+    assert "Delete Link" in html
+    assert "Confirm Delete" in html
+
+
+# ---------------------------------------------------------------------------
+# Phase 60: Smart Sorting & Quick Filters
+# ---------------------------------------------------------------------------
+
+
+def _orbit_template() -> str:
+    return (TEMPLATES_DIR / "orbit.html").read_text(encoding="utf-8")
+
+
+def test_dashboard_renders_the_netcare_sort_control(client_with_db: TestClient) -> None:
+    """Phase 60: the Netcare grid gains a sort dropdown and a direction toggle."""
+
+    login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
+    resp = client_with_db.get("/", cookies=login_resp.cookies)
+
+    assert resp.status_code == 200
+    assert 'id="netcare-sort"' in resp.text
+    assert 'id="netcare-sort-dir"' in resp.text
+    # Every sort key named for Phase 60 is a real option, not just a label.
+    for value in ("name", "status", "speed", "service"):
+        assert f'<option value="{value}"' in resp.text
+    for label in ("Branch Name", "Status / Severity", "Speed / Bandwidth", "Service Type"):
+        assert label in resp.text
+
+
+def test_dashboard_renders_the_netcare_quick_filters(client_with_db: TestClient) -> None:
+    """Phase 60: one-click filters for attention plus the three services."""
+
+    login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
+    resp = client_with_db.get("/", cookies=login_resp.cookies)
+
+    assert resp.status_code == 200
+    assert 'id="netcare-quick-filters"' in resp.text
+    assert 'aria-label="Quick filters for branch cards"' in resp.text
+    for value in ("ALL", "DEGRADED", "ASTINET", "METRO", "VPN"):
+        assert f'data-quick="{value}"' in resp.text
+    for label in ("All Branches", "Degraded / Down", "Astinet", "Metro-E", "VPN IP"):
+        assert label in resp.text
+    # "All" is the resting state, so an operator opening the page is unfiltered.
+    assert 'data-quick="ALL" aria-pressed="true"' in resp.text
+
+
+def test_quick_filter_composes_with_the_region_and_service_axes() -> None:
+    """A third axis must narrow the grid, never replace the two that exist."""
+
+    script = _dashboard_template()
+
+    assert "let netcareQuickFilter = 'ALL';" in script
+    assert "function netcareQuickMatches(card)" in script
+    assert "function applyQuickFilter(quick)" in script
+    match = re.search(
+        r"const regionMatch = [^;]*;.*?const serviceMatch = [^;]*;.*?"
+        r"const quickMatch = [^;]*;.*?"
+        r"const match = regionMatch && serviceMatch && quickMatch;",
+        script,
+        re.DOTALL,
+    )
+    assert match, "the quick filter no longer intersects the region and service axes"
+    assert "document.querySelectorAll('#netcare-quick-filters .netcare-pill')" in script
+
+
+def test_degraded_quick_filter_covers_every_unhealthy_status() -> None:
+    """Degraded means "not a healthy capture", not one hardcoded status name."""
+
+    script = _dashboard_template()
+
+    body = re.search(
+        r"function netcareQuickMatches\(card\) \{(.*?)\n        \}", script, re.DOTALL
+    )
+    assert body, "the quick-filter matcher no longer matches the expected structure"
+    assert "netcareQuickFilter === 'DEGRADED'" in body.group(1)
+    assert "card.dataset.status !== 'ok'" in body.group(1)
+
+
+def test_sorting_reorders_the_grid_instead_of_rebuilding_it() -> None:
+    """Cards must be moved, not re-rendered, or the listeners and grid die."""
+
+    script = _dashboard_template()
+
+    assert "function applyNetcareSort()" in script
+    assert "sorted.forEach(card => grid.appendChild(card));" in script
+    body = re.search(r"function applyNetcareSort\(\)(.*?)\n        }", script, re.DOTALL)
+    assert body, "the Netcare sorter no longer matches the expected structure"
+    assert "grid.innerHTML" not in body.group(1)
+
+
+def test_netcare_severity_sort_leads_with_the_links_needing_attention() -> None:
+    """The severity order is explicit so it cannot drift from the status codes."""
+
+    script = _dashboard_template()
+
+    rank = re.search(r"const netcareStatusRank = \{(.*?)\};", script, re.DOTALL)
+    assert rank, "the status ranking table is missing"
+    pairs = dict(re.findall(r"(\w+):\s*(\d+),", rank.group(1)))
+    # error is the worst and ok the healthiest.
+    assert pairs["error"] < pairs["no_graph"] < pairs["stale"] < pairs["pending"] < pairs["ok"]
+    assert "netcareStatusRank[card.dataset.status]" in script
+
+
+def test_netcare_sort_is_reapplied_after_a_live_refresh() -> None:
+    """A poll rewrites card statuses, so a stale order would be a visible bug."""
+
+    script = _dashboard_template()
+
+    render = re.search(r"function renderNetcare\(data\) \{(.*?)\n        \}", script, re.DOTALL)
+    assert render, "the Netcare renderer no longer matches the expected structure"
+    assert "applyNetcareFilters();" in render.group(1)
+    assert "applyNetcareSort();" in render.group(1)
+
+
+def test_netcare_cards_expose_every_sort_key(client_with_db: TestClient) -> None:
+    """The sort reads attributes off the card, so they have to be rendered."""
+
+    login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
+    resp = client_with_db.get("/", cookies=login_resp.cookies)
+
+    assert resp.status_code == 200
+    card = re.search(r'<div class="netcare-card"\s(.*?)>', resp.text, re.DOTALL)
+    assert card, "the card markup no longer matches the expected structure"
+    for attribute in ('data-name=', 'data-status=', 'data-service=', 'data-graph-size='):
+        assert attribute in card.group(1)
+
+
+def test_dashboard_sort_select_is_wired_to_the_sorter() -> None:
+    """A rendered dropdown nobody listens to would be a dead control."""
+
+    script = _dashboard_template()
+
+    assert "netcareSortSelect.addEventListener('change', applyNetcareSort)" in script
+    assert "netcareSortDir.addEventListener('click'" in script
+
+
+def test_orbit_renders_the_sort_toolbar(client_with_db: TestClient) -> None:
+    """Phase 60: the Orbit grid gains its own sort dropdown."""
+
+    login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
+    resp = client_with_db.get("/orbit", cookies=login_resp.cookies)
+
+    assert resp.status_code == 200
+    assert 'id="orbit-sort"' in resp.text
+    assert 'id="orbit-sort-dir"' in resp.text
+    for value in ("location", "modem-no", "quota", "status"):
+        assert f'<option value="{value}"' in resp.text
+    for label in ("Location", "Modem No", "Remaining Quota", "Active Status"):
+        assert label in resp.text
+
+
+def test_orbit_cards_expose_every_sort_key(client_with_db: TestClient) -> None:
+    login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
+    resp = client_with_db.get("/orbit", cookies=login_resp.cookies)
+
+    assert resp.status_code == 200
+    card = re.search(r'<div class="orbit-card"([^>]*)>', resp.text)
+    assert card, "the card markup no longer matches the expected structure"
+    for attribute in ('data-modem-no=', 'data-location=', 'data-quota=', 'data-status='):
+        assert attribute in card.group(1)
+
+
+def test_orbit_quota_sort_puts_the_lowest_remaining_modem_first() -> None:
+    """The whole point of a quota sort is finding the modem about to run out."""
+
+    script = _orbit_template()
+
+    assert "function applyOrbitSort()" in script
+    assert "quota: card => Number(card.getAttribute('data-quota')) || 0," in script
+    # Ascending is the natural direction for quota, so the default order really
+    # is lowest-first rather than merely being labelled that way.
+    assert "orbitSortDir.dataset.direction !== 'desc'" in script
+
+
+def test_orbit_sort_reorders_the_grid_instead_of_rebuilding_it() -> None:
+    script = _orbit_template()
+
+    assert "sorted.forEach(card => orbitGrid.appendChild(card));" in script
+    body = re.search(r"function applyOrbitSort\(\)(.*?)\n    }", script, re.DOTALL)
+    assert body, "the Orbit sorter no longer matches the expected structure"
+    assert "orbitGrid.innerHTML" not in body.group(1)
+
+
+def test_orbit_sort_is_reapplied_after_a_live_refresh() -> None:
+    """The poll rewrites the whole grid, so the chosen sort must be re-run."""
+
+    script = _orbit_template()
+
+    render = re.search(r"async function refreshOrbitModems\(\)(.*?)\n    \}", script, re.DOTALL)
+    assert render, "the Orbit poller no longer matches the expected structure"
+    assert "applyOrbitSort();" in render.group(1)
+
+
+def test_orbit_sort_toggle_is_not_mistaken_for_a_status_filter() -> None:
+    """The toggle reuses the pill styling; the filter wiring must stay scoped."""
+
+    script = _orbit_template()
+
+    # Unscoped lookups would grab the sort toggle and clear the status filter.
+    assert "document.querySelectorAll('.orbit-filter-bar .orbit-pill')" in script
+    assert "document.querySelector('.orbit-filter-bar .orbit-pill.active')" in script
+    assert "document.querySelectorAll('.orbit-pill')" not in script
+    assert "document.querySelector('.orbit-pill.active')" not in script
+
+
+# ---------------------------------------------------------------------------
+# Task 61.0: interactive Leaflet map
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def map_catalogs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point both catalogs at CSV files that actually carry coordinates.
+
+    The shared fixtures deliberately resolve to the built-in anonymous catalogs,
+    which ship without coordinates (they are placeholders, not a site map). A map
+    test therefore has to supply its own catalogs or it would only ever exercise
+    the empty state.
+    """
+
+    netcare_csv = tmp_path / "netcare_targets.csv"
+    netcare_csv.parent.mkdir(parents=True, exist_ok=True)
+    netcare_csv.write_text(
+        "type,target,name,address,region,ocr_enabled,service_type,latitude,longitude\n"
+        "SID,map-sid-1,Sudirman Link 01,Jl. Sudirman,CGK,True,Astinet,-6.208800,106.845600\n"
+        "SID,map-sid-2,Makassar Link 02,Jl. Urip Sumoharjo,MDN,True,Metro-E,-5.147700,119.432700\n"
+        "Graph-title,map-gt-1,Surabaya Link 03,Jl. A. Yani,SBY,True,VPN IP,-7.257900,112.752300\n"
+        "Graph-title,map-gt-2,No Coords Link 04,Jl. Gatot Subroto,CGK,True,Astinet,,\n",
+        encoding="utf-8",
+    )
+    orbit_csv = tmp_path / "orbit_targets.csv"
+    orbit_csv.write_text(
+        "no,imei,phone,location,ssid,status,latitude,longitude\n"
+        "1,860000000000001,081200000001,Room Alpha,Orbit-01,ACTIVE,-6.200500,106.816600\n"
+        "2,860000000000002,081200000002,Room Bravo,Orbit-02,IDLE,-6.201000,106.817000\n"
+        "3,860000000000003,081200000003,No Coords Room Charlie,Orbit-03,ACTIVE,,\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(settings, "netcare_catalog_file", str(netcare_csv))
+    monkeypatch.setattr(settings, "orbit_catalog_file", str(orbit_csv))
+
+
+def _map_payload(resp_text: str) -> list[dict[str, Any]]:
+    """Pull the server-rendered marker payload out of the dashboard HTML."""
+
+    block = re.search(
+        r'<script id="map-markers-data" type="application/json">(.*?)</script>',
+        resp_text,
+        re.DOTALL,
+    )
+    assert block, "the dashboard no longer renders the map marker payload"
+    return json.loads(block.group(1))
+
+
+def test_dashboard_renders_the_map_container(
+    client_with_db: TestClient, map_catalogs: None
+) -> None:
+    """The map lives on the dashboard, above the Netcare grid (FR-48.1)."""
+
+    login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
+    resp = client_with_db.get("/", cookies=login_resp.cookies)
+
+    assert resp.status_code == 200
+    assert 'id="map-section"' in resp.text
+    assert 'id="map-card"' in resp.text
+    assert 'id="map"' in resp.text
+    assert 'class="map-container"' in resp.text
+    # Above the grid, so the toggle is reachable without scrolling past 18 cards.
+    assert resp.text.index('id="map-section"') < resp.text.index('id="netcare-section"')
+
+
+def test_map_assets_are_served_from_the_bundle_not_a_cdn(
+    client_with_db: TestClient, map_catalogs: None
+) -> None:
+    """Leaflet is vendored, so an air-gapped deployment still renders the map."""
+
+    login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
+    resp = client_with_db.get("/", cookies=login_resp.cookies)
+
+    assert resp.status_code == 200
+    assert '<link rel="stylesheet" href="/static/leaflet/leaflet.css">' in resp.text
+    assert '<script src="/static/leaflet/leaflet.js"></script>' in resp.text
+
+    for asset in ("leaflet.js", "leaflet.css"):
+        asset_resp = client_with_db.get(f"/static/leaflet/{asset}", cookies=login_resp.cookies)
+        assert asset_resp.status_code == 200, f"{asset} is not served from the bundle"
+
+
+def test_map_offers_a_grid_and_map_view_toggle(
+    client_with_db: TestClient, map_catalogs: None
+) -> None:
+    """FR-61.2: the toggle switches between the card grid and the map."""
+
+    login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
+    resp = client_with_db.get("/", cookies=login_resp.cookies)
+
+    assert resp.status_code == 200
+    assert 'id="map-view-toggle"' in resp.text
+    assert "Grid View" in resp.text
+    assert "Map View" in resp.text
+    assert 'id="map-view-grid-btn"' in resp.text
+    assert 'id="map-view-map-btn"' in resp.text
+
+
+def test_map_toggle_is_wired_to_the_view_switch(client_with_db: TestClient) -> None:
+    """Rendered buttons nobody listens to would be a dead control."""
+
+    script = _dashboard_template()
+
+    assert "btn.addEventListener('click', () => applyView(btn.dataset.view))" in script
+    assert "function applyView(view)" in script
+    # Grid View is the default landing state; otherwise the map would push 18 cards down.
+    assert "applyView('grid');" in script
+    # A map built inside a hidden panel stays a grey sliver without a re-measure.
+    assert "map.invalidateSize();" in script
+
+
+def test_map_popups_escape_catalog_values(client_with_db: TestClient) -> None:
+    """Target names are operator-entered; a popup must not render them as markup."""
+
+    script = _dashboard_template()
+
+    assert "function escapeHtml(value)" in script
+    # Every interpolated popup field goes through the escaper.
+    assert "escapeHtml(marker.name)" in script
+    assert "escapeHtml(marker.identifier)" in script
+    assert "escapeHtml(marker.status_label)" in script
+    assert "escapeHtml(marker.detail)" in script
+    # The payload itself is emitted with Jinja's tojson, not raw interpolation.
+    assert "JSON.parse(dataEl.textContent || '[]')" in script
+
+
+def test_map_marker_payload_carries_coordinates_and_status(
+    client_with_db: TestClient, map_catalogs: None
+) -> None:
+    """Every marker needs coordinates, a colour and an identifier to plot."""
+
+    login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
+    resp = client_with_db.get("/", cookies=login_resp.cookies)
+
+    assert resp.status_code == 200
+    markers = _map_payload(resp.text)
+    assert markers, "the dashboard rendered an empty map payload"
+    for marker in markers:
+        assert isinstance(marker["latitude"], float)
+        assert isinstance(marker["longitude"], float)
+        assert str(marker["color"]).startswith("#")
+        assert marker["name"]
+        # Popup fields (FR-48.2) ride along in the payload, not a second fetch.
+        assert marker["identifier_label"] in ("SID", "IMEI")
+        assert marker["identifier"]
+        assert marker["status_label"]
+        assert "last_polled" in marker
+        assert "card_selector" in marker
+
+
+def test_map_markers_cover_both_netcare_and_orbit(
+    client_with_db: TestClient, map_catalogs: None
+) -> None:
+    """One map, both footprints (FR-48.1)."""
+
+    login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
+    resp = client_with_db.get("/", cookies=login_resp.cookies)
+
+    assert resp.status_code == 200
+    kinds = {marker["kind"] for marker in _map_payload(resp.text)}
+
+    assert "netcare" in kinds
+    assert "orbit" in kinds
+
+
+def test_map_points_endpoint_returns_the_same_markers(
+    client_with_db: TestClient, map_catalogs: None
+) -> None:
+    """The auto-refresh cycle re-pulls markers instead of reloading the page."""
+
+    login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
+    resp = client_with_db.get("/api/map/points", cookies=login_resp.cookies)
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["count"] == len(payload["markers"])
+    assert payload["markers"], "the refresh endpoint returned no markers"
+    for marker in payload["markers"]:
+        assert -90.0 <= marker["latitude"] <= 90.0
+        assert -180.0 <= marker["longitude"] <= 180.0
+        assert marker["card_url"] in ("/", "/orbit")
+
+
+def test_map_points_endpoint_requires_authentication(client_with_db: TestClient) -> None:
+    """Marker data carries target locations, so it is behind the session cookie."""
+
+    resp = client_with_db.get("/api/map/points", headers={"Accept": "application/json"})
+
+    assert resp.status_code in (302, 303, 307, 401, 403)
+
+
+def test_map_shows_an_empty_state_when_no_target_has_coordinates(
+    client_with_db: TestClient,
+) -> None:
+    """The built-in catalogs carry no coordinates, so say so instead of rendering grey."""
+
+    login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
+    resp = client_with_db.get("/", cookies=login_resp.cookies)
+
+    assert resp.status_code == 200
+    assert 'id="map-card"' in resp.text
+    assert 'id="map-empty"' in resp.text
+    # A Leaflet container with nothing in it would just be a grey rectangle.
+    assert 'id="map"' not in resp.text
+    assert _map_payload(resp.text) == []
+
+
+def test_map_empty_state_still_refreshes_without_markers(
+    client_with_db: TestClient,
+) -> None:
+    """A zero-marker refresh is a valid answer, not a 404."""
+
+    login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
+    resp = client_with_db.get("/api/map/points", cookies=login_resp.cookies)
+
+    assert resp.status_code == 200
+    assert resp.json() == {"markers": [], "count": 0}
+
+
+# -- map_data unit tests -----------------------------------------------------
+
+
+def test_coordinate_rejects_unusable_values() -> None:
+    """Only a real, in-range pair is worth plotting."""
+
+    from mrtg_cmp.web.map_data import coordinate_or_none
+
+    assert coordinate_or_none(-6.2, 106.8) == (-6.2, 106.8)
+    assert coordinate_or_none(None, 106.8) is None
+    assert coordinate_or_none(-6.2, None) is None
+    assert coordinate_or_none(0.0, 0.0) is None
+    assert coordinate_or_none(91.0, 106.8) is None
+    assert coordinate_or_none(-6.2, 181.0) is None
+    assert coordinate_or_none("abc", 106.8) is None
+    # bool is an int subclass, so True would otherwise plot at latitude 1.
+    assert coordinate_or_none(True, 106.8) is None
+
+
+def test_marker_colour_precedence_puts_health_before_service() -> None:
+    """FR-61.2: a degraded Astinet link is orange, not blue."""
+
+    from mrtg_cmp.web.map_data import (
+        MARKER_COLOR_DEGRADED,
+        MARKER_COLOR_DOWN,
+        MARKER_COLOR_OK,
+        MARKER_COLOR_SERVICE,
+        netcare_marker_color,
+    )
+
+    assert netcare_marker_color("ok", "VPN IP") == MARKER_COLOR_OK
+    assert netcare_marker_color("ok", "Astinet") == MARKER_COLOR_SERVICE
+    assert netcare_marker_color("ok", "Metro-E") == MARKER_COLOR_SERVICE
+    assert netcare_marker_color("stale", "Astinet") == MARKER_COLOR_DEGRADED
+    assert netcare_marker_color("pending", "Metro-E") == MARKER_COLOR_DEGRADED
+    assert netcare_marker_color("error", "Astinet") == MARKER_COLOR_DOWN
+    assert netcare_marker_color("down", "VPN IP") == MARKER_COLOR_DOWN
+
+
+def test_orbit_marker_colour_is_active_versus_everything_else() -> None:
+    from mrtg_cmp.web.map_data import (
+        MARKER_COLOR_DEGRADED,
+        MARKER_COLOR_OK,
+        orbit_marker_color,
+    )
+
+    assert orbit_marker_color("ACTIVE") == MARKER_COLOR_OK
+    assert orbit_marker_color("active") == MARKER_COLOR_OK
+    assert orbit_marker_color("IDLE") == MARKER_COLOR_DEGRADED
+    assert orbit_marker_color("") == MARKER_COLOR_DEGRADED
+
+
+def test_marker_builders_skip_targets_without_coordinates() -> None:
+    """A target with no lat/lon must not get a marker at all."""
+
+    from mrtg_cmp.orbit.scraper import OrbitModemStatus
+    from mrtg_cmp.orbit.targets import OrbitModem
+    from mrtg_cmp.web.map_data import build_map_markers
+
+    cards = [
+        {"target": "with-coords", "name": "With Coords", "latitude": -6.2, "longitude": 106.8},
+        {"target": "no-coords", "name": "No Coords", "latitude": None, "longitude": None},
+    ]
+    modems = [
+        OrbitModemStatus(
+            target=OrbitModem(
+                no=1,
+                imei="860000000000001",
+                phone="081200000001",
+                location="A",
+                ssid="Orbit-A",
+                latitude=-6.2,
+                longitude=106.8,
+            )
+        ),
+        OrbitModemStatus(
+            target=OrbitModem(
+                no=2, imei="860000000000002", phone="081200000002", location="B", ssid="Orbit-B"
+            )
+        ),
+    ]
+
+    markers = build_map_markers(cards, modems)
+
+    assert [m["id"] for m in markers] == ["netcare:with-coords", "orbit:1"]
+
+
+def test_orbit_markers_point_at_the_orbit_page() -> None:
+    """Orbit cards live on /orbit, so the popup link navigates instead of scrolling."""
+
+    from mrtg_cmp.orbit.scraper import OrbitModemStatus
+    from mrtg_cmp.orbit.targets import OrbitModem
+    from mrtg_cmp.web.map_data import orbit_marker
+
+    status = OrbitModemStatus(
+        target=OrbitModem(
+            no=42,
+            imei="356938035643809",
+            phone="081200000042",
+            location="Surabaya",
+            ssid="Orbit-SBY-42",
+            latitude=-7.25,
+            longitude=112.75,
+        )
+    )
+    marker = orbit_marker(status)
+
+    assert marker is not None
+    assert marker["card_url"] == "/orbit"
+    assert marker["card_selector"] == '.orbit-card[data-modem-no="42"]'
+    assert marker["identifier_label"] == "IMEI"
+    assert marker["identifier"] == "356938035643809"
+
+
+def test_netcare_markers_scroll_to_their_card() -> None:
+    """Cards are server-rendered with data-target, so the selector resolves."""
+
+    from mrtg_cmp.web.map_data import netcare_marker
+
+    marker = netcare_marker(
+        {
+            "target": "TLKM-BRANCH-01",
+            "name": "Jakarta Branch",
+            "status": "ok",
+            "service_type": "Astinet",
+            "latitude": -6.2,
+            "longitude": 106.8,
+        }
+    )
+
+    assert marker is not None
+    assert marker["card_url"] == "/"
+    assert marker["card_selector"] == '.netcare-card[data-target="TLKM-BRANCH-01"]'
+    assert marker["identifier_label"] == "SID"
+    assert marker["identifier"] == "TLKM-BRANCH-01"

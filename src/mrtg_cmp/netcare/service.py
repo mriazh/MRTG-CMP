@@ -15,6 +15,7 @@ roughly 150 seconds to roughly 45 (FR-15.1).
 from __future__ import annotations
 
 import logging
+import shutil
 import signal
 import threading
 import time
@@ -48,7 +49,15 @@ from .scraper import (
     normalize_day_key,
 )
 from .session import NetcareSession
-from .targets import NetcareTarget, NetcareTargetType, resolve_targets
+from .targets import (
+    DEFAULT_TARGETS,
+    NetcareTarget,
+    NetcareTargetType,
+    active_targets,
+    default_catalog_path,
+    load_catalog,
+    save_catalog_csv,
+)
 
 logger = logging.getLogger("mrtg_cmp.netcare.service")
 
@@ -440,11 +449,68 @@ class NetcareService:
         cache: NetcareCache,
         targets: Sequence[NetcareTarget],
         priority_queue: list[str] | None = None,
+        catalog_path: Path | str | None = None,
     ) -> None:
         self.cache = cache
         self.targets = list(targets)
         self._known = {t.target for t in self.targets}
         self._priority: list[str] = list(priority_queue or [])
+        self.catalog_path = (
+            Path(catalog_path)
+            if catalog_path is not None
+            else (default_catalog_path() or Path("config/netcare_targets.csv"))
+        )
+
+    def upsert_target(self, target: NetcareTarget, original_id: str | None = None) -> None:
+        """Insert or update a target in the catalog, copying cache if renamed."""
+        if original_id and original_id != target.target:
+            cached_candidates = [
+                self.cache.image_path(original_id),
+                Path("data/netcare_cache") / f"{original_id}.png",
+            ]
+            for old_img in cached_candidates:
+                if old_img.is_file():
+                    new_img = self.cache.image_path(target.target)
+                    new_img.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(old_img, new_img)
+                    break
+
+            replaced = False
+            for i, t in enumerate(self.targets):
+                if t.target == original_id:
+                    self.targets[i] = target
+                    replaced = True
+                    break
+            if not replaced:
+                self.targets.append(target)
+        elif original_id:
+            replaced = False
+            for i, t in enumerate(self.targets):
+                if t.target == original_id:
+                    self.targets[i] = target
+                    replaced = True
+                    break
+            if not replaced:
+                self.targets.append(target)
+        else:
+            self.targets.append(target)
+
+        save_catalog_csv(self.targets, self.catalog_path)
+        self._known = {t.target for t in self.targets}
+
+    def remove_target(self, target_id: str) -> bool:
+        """Remove a target by target_id, persisting the catalog to CSV."""
+        found = False
+        for i, t in enumerate(self.targets):
+            if t.target == target_id:
+                del self.targets[i]
+                found = True
+                break
+        if found:
+            save_catalog_csv(self.targets, self.catalog_path)
+            self._known = {t.target for t in self.targets}
+            return True
+        return False
 
     def stats(self, day: datetime | str | None = None) -> dict[str, Any]:
         """Return manifest counters used by the API and daemon logs."""
@@ -601,10 +667,10 @@ class NetcareService:
         return outcomes
 
     def _select(self, target_ids: Sequence[str] | None) -> list[NetcareTarget]:
-        """Return the requested targets in catalog order, defaulting to all."""
+        """Return the requested targets in catalog order, defaulting to all active."""
 
         if not target_ids:
-            return list(self.targets)
+            return active_targets(self.targets)
         wanted = set(target_ids)
         return [t for t in self.targets if t.target in wanted]
 
@@ -1224,8 +1290,21 @@ def build_service_from_settings(
 
     cfg = config or global_settings
     resolved_cache = Path(cache_dir) if cache_dir is not None else Path(cfg.netcare_cache_dir)
-    targets = resolve_targets(cfg.netcare_catalog_file)
-    return NetcareService(cache=NetcareCache(resolved_cache), targets=targets)
+    catalog_path = (
+        Path(cfg.netcare_catalog_file)
+        if cfg.netcare_catalog_file is not None
+        else (default_catalog_path() or Path("config/netcare_targets.csv"))
+    )
+    targets: list[NetcareTarget]
+    try:
+        targets = load_catalog(catalog_path)
+    except (OSError, ValueError):
+        targets = list(DEFAULT_TARGETS)
+    return NetcareService(
+        cache=NetcareCache(resolved_cache),
+        targets=targets,
+        catalog_path=catalog_path,
+    )
 
 
 def worker_profile_dir(profile_dir: Path, worker: int | None) -> Path:
@@ -1286,8 +1365,9 @@ def build_daemon_from_settings(config: Settings | None = None) -> NetcareDaemon:
     def run_round() -> list[ScrapeOutcome]:
         today = datetime.now()
         priority = set(service.drain_priority())
-        ordered = [t for t in service.targets if t.target in priority]
-        ordered += [t for t in service.targets if t.target not in priority]
+        active = active_targets(service.targets)
+        ordered = [t for t in active if t.target in priority]
+        ordered += [t for t in active if t.target not in priority]
 
         def capturer_for(worker: int) -> TargetCapturer:
             return _per_target_capture(pool.get(worker), cfg.netcare_base_url, today)

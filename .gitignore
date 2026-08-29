@@ -52,6 +52,11 @@ data/orbit_cache/
 /config/orbit_*.xlsx
 /config/orbit_targets.csv
 
+# Timestamped copies written before an in-place Orbit catalog edit. These carry the
+# same private phone numbers and IMEIs as the catalog they came from, so they must
+# never be committed.
+/config/backups/
+
 # Packaging, builds, and distributions
 *.egg-info/
 dist/

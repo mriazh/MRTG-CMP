@@ -36,10 +36,14 @@ from __future__ import annotations
 import csv
 import logging
 import re
+import shutil
+import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger("mrtg_cmp.netcare.targets")
 
@@ -188,6 +192,8 @@ class NetcareTarget:
     region: str
     ocr_enabled: bool = True
     service_type: str = UNCLASSIFIED_SERVICE
+    latitude: float | None = None
+    longitude: float | None = None
 
     @property
     def cache_filename(self) -> str:
@@ -195,7 +201,7 @@ class NetcareTarget:
 
         return f"{self.target}.png"
 
-    def as_dict(self) -> dict[str, str | bool]:
+    def as_dict(self) -> dict[str, Any]:
         """Return a JSON-serializable view of the target."""
 
         return {
@@ -210,6 +216,8 @@ class NetcareTarget:
             "service_label": service_label(self.service_type),
             "service_description": service_description(self.service_type),
             "service_badge_class": service_badge_class(self.service_type),
+            "latitude": self.latitude,
+            "longitude": self.longitude,
         }
 
 
@@ -358,6 +366,19 @@ def find_target(
     return None
 
 
+def _parse_coord(val: Any) -> float | None:
+    """Parse coordinate string to float, returning None if empty or invalid."""
+    if val is None:
+        return None
+    val_str = str(val).strip()
+    if not val_str:
+        return None
+    try:
+        return float(val_str)
+    except ValueError:
+        return None
+
+
 def load_catalog(path: Path) -> list[NetcareTarget]:
     """Load a CSV target catalog overriding the built-in list.
 
@@ -388,6 +409,8 @@ def load_catalog(path: Path) -> list[NetcareTarget]:
             service_type = parse_service_type(row.get("service_type") or "")
             if service_type is None:
                 logger.debug("Catalog row %s has no known service type", target_id)
+            latitude = _parse_coord(row.get("latitude"))
+            longitude = _parse_coord(row.get("longitude"))
             loaded.append(
                 NetcareTarget(
                     target=target_id,
@@ -397,9 +420,73 @@ def load_catalog(path: Path) -> list[NetcareTarget]:
                     region=region,
                     ocr_enabled=(row.get("ocr_enabled") or "").strip().lower() in _TRUTHY,
                     service_type=service_type or UNCLASSIFIED_SERVICE,
+                    latitude=latitude,
+                    longitude=longitude,
                 )
             )
     return loaded
+
+
+def load_catalog_csv(path: Path) -> list[NetcareTarget]:
+    """Load a CSV target catalog overriding the built-in list."""
+    return load_catalog(path)
+
+
+def save_catalog_csv(targets: Sequence[NetcareTarget], path: Path) -> Path | None:
+    """Save target catalog to CSV with automated timestamped backup.
+
+    - Creates directory config/backups if not present.
+    - Prior to writing, if path.is_file(), creates timestamped backup:
+      config/backups/netcare_targets_{timestamp}.csv.bak (where timestamp is YYYYMMDD_HHMMSS).
+    - Writes to temporary file and atomically replaces path.
+    - Header columns: type,target,name,address,region,ocr_enabled,service_type,latitude,longitude.
+    - Returns backup path if created.
+    """
+
+    target_path = Path(path)
+    if target_path.parent.name == "config":
+        backup_dir = target_path.parent / "backups"
+    else:
+        backup_dir = target_path.parent / "config" / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+
+    backup_path: Path | None = None
+    if target_path.is_file():
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = backup_dir / f"netcare_targets_{timestamp}.csv.bak"
+        shutil.copy2(target_path, backup_path)
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = target_path.with_name(f"{target_path.name}.{uuid.uuid4().hex}.tmp")
+    header = (
+        "type",
+        "target",
+        "name",
+        "address",
+        "region",
+        "ocr_enabled",
+        "service_type",
+        "latitude",
+        "longitude",
+    )
+    with tmp_path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(header)
+        for t in targets:
+            writer.writerow([
+                t.type.value,
+                t.target,
+                t.name,
+                t.address,
+                t.region,
+                "true" if t.ocr_enabled else "false",
+                t.service_type,
+                "" if t.latitude is None else str(t.latitude),
+                "" if t.longitude is None else str(t.longitude),
+            ])
+
+    tmp_path.replace(target_path)
+    return backup_path
 
 
 def resolve_targets(catalog_file: Path | str | None = None) -> list[NetcareTarget]:
@@ -483,10 +570,12 @@ __all__ = [
     "default_catalog_path",
     "find_target",
     "load_catalog",
+    "load_catalog_csv",
     "parse_service_type",
     "region_counts",
     "region_label",
     "resolve_targets",
+    "save_catalog_csv",
     "service_badge_class",
     "service_counts",
     "service_description",

@@ -90,6 +90,32 @@ class OrbitCache:
             logger.warning("Failed seeding Orbit cache: %s", exc)
         return seeded
 
+    def reconcile(self, catalog: list[OrbitModem]) -> list[OrbitModemStatus]:
+        """Align the cache with the current catalog after an add/edit/delete.
+
+        Kept modems inherit their existing scraped quota; new modems get a fresh
+        demo status; removed modems are dropped. The cache is rewritten so the
+        dashboard reflects CRUD changes without waiting for a re-sync.
+        """
+        with self._lock:
+            cached = self.load() or []
+            by_no = {status.target.no: status for status in cached}
+
+            reconciled: list[OrbitModemStatus] = []
+            for modem in catalog:
+                existing = by_no.get(modem.no)
+                if existing is not None:
+                    existing.target = modem
+                    reconciled.append(existing)
+                else:
+                    reconciled.extend(self.generate_demo_status([modem]))
+
+            try:
+                self.save(reconciled)
+            except Exception as exc:
+                logger.warning("Failed reconciling Orbit cache: %s", exc)
+            return reconciled
+
     @staticmethod
     def generate_demo_status(catalog: list[OrbitModem]) -> list[OrbitModemStatus]:
         """Generate realistic mock status data for the catalog."""
@@ -110,20 +136,6 @@ class OrbitCache:
                         earliest_days_left=None,
                         last_scraped_at=now_str,
                         error="IMEI_PENDING",
-                    )
-                )
-            elif m.status == "EX_CUSTOMER":
-                demo_list.append(
-                    OrbitModemStatus(
-                        target=m,
-                        total_remaining_gb=0.0,
-                        total_quota_gb=0.0,
-                        multimedia_active=False,
-                        packages=[],
-                        earliest_expiry_str=None,
-                        earliest_days_left=None,
-                        last_scraped_at=now_str,
-                        error="EX_CUSTOMER",
                     )
                 )
             elif m.no == 2:  # Sikidang Room

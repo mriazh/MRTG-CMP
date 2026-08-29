@@ -220,7 +220,7 @@
     <!-- Screen 1: Passthrough Authentication Gate -->
     <div id="console-auth-screen" class="console-auth-card">
         <div class="console-auth-header">
-            <span style="font-size: 1.3rem;">🔒</span>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color: var(--primary); flex-shrink: 0;"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
             <div>
                 <h2>MikroTik RouterOS Authentication</h2>
                 <div style="font-size: 0.8rem; color: var(--text-muted);">Target: <code>{{ router_target }}</code></div>
@@ -228,7 +228,10 @@
         </div>
         <div class="console-auth-body">
             <div class="console-notice-box">
-                🛡️ <strong>Live Passthrough Authentication:</strong><br>
+                <span style="display: inline-flex; align-items: center; gap: 0.35rem; font-weight: 700;">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color: var(--primary);"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+                    Live Passthrough Authentication:
+                </span><br>
                 Please enter valid MikroTik credentials (e.g. <code>admin</code>). Authentication is verified live over the RouterOS API. Zero router credentials are saved to local database or disk.
             </div>
 

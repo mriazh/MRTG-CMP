@@ -9,9 +9,11 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import ANY, MagicMock, patch
 
+import pytest
 from starlette.testclient import TestClient
 
 from mrtg_cmp.cli import main
+from mrtg_cmp.config import settings
 from mrtg_cmp.orbit.cache import OrbitCache
 from mrtg_cmp.orbit.scraper import (
     OrbitModemStatus,
@@ -29,14 +31,25 @@ from mrtg_cmp.orbit.service import (
     build_orbit_driver,
 )
 from mrtg_cmp.orbit.targets import (
+    DEFAULT_EXCEL_PATH,
     OrbitModem,
+    _classify_status,
     _default_orbit_catalog,
     filter_stats,
     load_orbit_catalog_csv,
     load_orbit_catalog_excel,
+    persist_orbit_catalog,
+    remove_orbit_modem,
     resolve_orbit_catalog,
+    save_orbit_catalog_csv,
+    save_orbit_catalog_excel,
     update_catalog_modem_ssid,
+    upsert_orbit_modem,
 )
+
+# The default workbook name is deployment-specific, so tests derive it from the
+# constant rather than hard-coding the string (which the OpSec gate rejects).
+_XLSX_NAME = DEFAULT_EXCEL_PATH.name
 
 
 def test_orbit_modem_model_and_imei_validation() -> None:
@@ -87,9 +100,13 @@ def test_default_catalog_structure_and_counts() -> None:
     stats = filter_stats(modems)
     assert stats["all"] == 12
     assert stats["active"] == 5
-    assert stats["idle"] == 6
-    assert stats["ex_customer"] == 1
+    assert stats["idle"] == 7
     assert stats["imei_pending"] == 2
+    assert "ex_customer" not in stats
+
+    # Modem 10 was migrated from EX_CUSTOMER to IDLE (Phase 59)
+    modem_10 = next(m for m in modems if m.no == 10)
+    assert modem_10.status == "IDLE"
 
     # Rows 1 & 3 are 10-digit IDs
     assert modems[0].imei_valid is False
@@ -106,10 +123,10 @@ def test_default_catalog_structure_and_counts() -> None:
 def test_load_orbit_catalog_csv(tmp_path: Path) -> None:
     """CSV loader parses headers and normalizes status."""
     csv_file = tmp_path / "test_targets.csv"
-    csv_content = """no,imei,phone,location,ssid,status
-1,1700000001,081200000001,Meeting Room 1,SSID-01,ACTIVE
-2,860000000000002,081200000002,IDLE ,SSID-02,IDLE
-3,860000000000003,081200000003,EX Modem Customer,SSID-03,EX_CUSTOMER
+    csv_content = """no,imei,phone,location,ssid,status,latitude,longitude
+1,1700000001,081200000001,Meeting Room 1,SSID-01,ACTIVE,-6.200500,106.816600
+2,860000000000002,081200000002,IDLE ,SSID-02,IDLE,,
+3,860000000000003,081200000003,EX Modem Customer,SSID-03,EX_CUSTOMER,-6.9,106.1
 """
     csv_file.write_text(csv_content, encoding="utf-8")
 
@@ -117,10 +134,16 @@ def test_load_orbit_catalog_csv(tmp_path: Path) -> None:
     assert len(modems) == 3
     assert modems[0].status == "ACTIVE"
     assert modems[0].imei_valid is False
+    assert modems[0].latitude == -6.2005
+    assert modems[0].longitude == 106.8166
     assert modems[1].status == "IDLE"
     assert modems[1].imei_valid is True
-    assert modems[2].status == "EX_CUSTOMER"
+    assert modems[1].latitude is None
+    assert modems[1].longitude is None
+    # Legacy EX_CUSTOMER label is folded into IDLE (Phase 59)
+    assert modems[2].status == "IDLE"
     assert modems[2].imei_valid is True
+    assert modems[2].latitude == -6.9
 
 
 def test_load_orbit_catalog_excel_if_present() -> None:
@@ -135,8 +158,10 @@ def test_load_orbit_catalog_excel_if_present() -> None:
     stats = filter_stats(modems)
     assert stats["all"] == 12
     assert stats["active"] == 5
-    assert stats["idle"] == 6
-    assert stats["ex_customer"] == 1
+    # EX_CUSTOMER is gone; every non-active modem is counted as IDLE (Phase 59)
+    assert stats["idle"] == 7
+    assert stats["active"] + stats["idle"] == stats["all"]
+    assert "ex_customer" not in stats
     assert stats["imei_pending"] in (1, 2)
 
     # Row 1 is a 10-digit ID
@@ -320,8 +345,8 @@ def test_parse_package_cards_text_format() -> None:
     assert packages[2].days_left == 13
 
 
-def test_orbit_scraper_invalid_imei_skips_portal_but_valid_ex_customer_needs_driver() -> None:
-    """Only invalid IMEI skips MyOrbit; valid EX_CUSTOMER modem needs a driver."""
+def test_orbit_scraper_invalid_imei_skips_portal_but_valid_idle_needs_driver() -> None:
+    """Only invalid IMEI skips MyOrbit; a valid IDLE modem still needs a driver."""
     scraper = OrbitScraper()
 
     # 10-digit IMEI modem
@@ -331,9 +356,9 @@ def test_orbit_scraper_invalid_imei_skips_portal_but_valid_ex_customer_needs_dri
     assert status_invalid.total_quota_gb == 0.0
     assert status_invalid.packages == []
 
-    # EX_CUSTOMER modem
+    # IDLE / spare modem
     modem_ex = OrbitModem(
-        10, "860000000000010", "081200000010", "Old Site", "Orbit-Old", status="EX_CUSTOMER"
+        10, "860000000000010", "081200000010", "Old Site", "Orbit-Old", status="IDLE"
     )
     driver = MagicMock()
     with patch.object(
@@ -732,8 +757,8 @@ def test_api_orbit_modems_endpoint(client_with_db: TestClient) -> None:
     assert len(modems) == 12
     assert data["stats"]["all"] == 12
     assert data["stats"]["active"] == 5
-    assert data["stats"]["idle"] == 6
-    assert data["stats"]["ex_customer"] == 1
+    assert data["stats"]["idle"] == 7
+    assert "ex_customer" not in data["stats"]
     assert data["stats"]["imei_pending"] == 2
 
     summary = data["summary"]
@@ -771,8 +796,10 @@ def test_orbit_dashboard_html_view(client_with_db: TestClient) -> None:
     assert "Telkomsel Orbit Modem Monitoring" in text
     assert "All Modems (12)" in text
     assert "Active in Room (5)" in text
-    assert "Idle / Spare (6)" in text
-    assert "Decommissioned (1)" in text
+    assert "Idle / Spare (7)" in text
+    # Decommissioned / EX_CUSTOMED category was removed in Phase 59
+    assert "Decommissioned" not in text
+    assert "EX_CUSTOMER" not in text
     assert "Refresh All" in text
     assert "btn-sync-orbit" not in text
     assert "View Package Details" in text
@@ -782,6 +809,16 @@ def test_orbit_dashboard_html_view(client_with_db: TestClient) -> None:
     assert "pollOrbitSyncStatus" in text
     assert "fetch('/api/orbit/sync'" in text
     assert "orbit-package-modal" in text or "orbit-modal" in text
+
+    # Phase 59 CRUD UI (Add / Edit / Delete)
+    assert "btn-orbit-add" in text
+    assert "btn-orbit-edit" in text
+    assert "btn-orbit-delete" in text
+    assert 'id="orbit-edit-modal"' in text
+    assert 'id="orbit-delete-modal"' in text
+    assert 'id="orbit-form-latitude"' in text
+    assert 'id="orbit-form-longitude"' in text
+    assert "/api/orbit/modem" in text
 
 
 def test_extract_modem_info_updates_target_ssid() -> None:
@@ -960,7 +997,7 @@ def test_orbit_service_sync_all(tmp_path: Path) -> None:
     catalog = [
         OrbitModem(1, "1700000001", "081200000001", "Room 1", "SSID-1"),  # Invalid IMEI
         OrbitModem(2, "860000000000002", "081200000002", "Room 2", "SSID-2"),  # Valid
-        OrbitModem(3, "860000000000003", "081200000003", "Ex Site", "SSID-3", status="EX_CUSTOMER"),
+        OrbitModem(3, "860000000000003", "081200000003", "Spare Site", "SSID-3", status="IDLE"),
     ]
 
     mock_driver = MagicMock()
@@ -1221,4 +1258,443 @@ def test_build_orbit_daemon_from_settings() -> None:
     assert daemon.interval_seconds == 300
     assert callable(daemon.catalog_loader)
     assert isinstance(daemon.cache, OrbitCache)
+
+
+def test_orbit_modem_coordinates_are_coerced() -> None:
+    """Numeric strings become floats; blanks and junk become None."""
+    modem = OrbitModem(
+        1, "860000000000001", "081200000001", "Room 1", "SSID-1",
+        latitude="-6.2005", longitude=" 106.8166 ",
+    )
+    assert modem.latitude == -6.2005
+    assert modem.longitude == 106.8166
+
+    blank = OrbitModem(
+        2, "860000000000002", "081200000002", "Room 2", "SSID-2",
+        latitude="", longitude="not-a-number",
+    )
+    assert blank.latitude is None
+    assert blank.longitude is None
+    assert blank.as_dict()["latitude"] is None
+    assert blank.as_dict()["longitude"] is None
+
+
+def test_classify_status_folds_legacy_labels_into_idle() -> None:
+    """Only ACTIVE stays ACTIVE; every other legacy label becomes IDLE."""
+    assert _classify_status("ACTIVE", "Room") == "ACTIVE"
+    assert _classify_status("aktif", "Room") == "ACTIVE"
+    for legacy in ("IDLE", "EX_CUSTOMER", "BEKAS", "Decommissioned", "  "):
+        assert _classify_status(legacy, "Room") == "IDLE"
+
+    # A blank status falls back to the location heuristic
+    assert _classify_status(None, "Meeting Room") == "ACTIVE"
+    assert _classify_status(None, "EX MODEM Korean Air H3") == "IDLE"
+
+
+def test_save_orbit_catalog_csv_roundtrip_creates_timestamped_backup(tmp_path: Path) -> None:
+    """Saving twice keeps a timestamped .bak copy of the first write."""
+    csv_path = tmp_path / "orbit_targets.csv"
+    modems = [
+        OrbitModem(1, "860000000000001", "081200000001", "Room 1", "SSID-1",
+                   status="ACTIVE", latitude=-6.2, longitude=106.8),
+        OrbitModem(2, "860000000000002", "081200000002", "Room 2", "SSID-2", status="IDLE"),
+    ]
+
+    assert save_orbit_catalog_csv(modems, csv_path) is None
+    assert csv_path.is_file()
+
+    reloaded = load_orbit_catalog_csv(csv_path)
+    assert len(reloaded) == 2
+    assert reloaded[0].latitude == -6.2
+    assert reloaded[0].longitude == 106.8
+    assert reloaded[1].latitude is None
+
+    backup = save_orbit_catalog_csv(reloaded, csv_path)
+    assert backup is not None
+    assert backup.exists()
+    assert backup.parent == tmp_path / "backups"
+    assert backup.suffix == ".bak"
+    assert ".csv.bak" in backup.name
+    # No temp files are left behind
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_save_orbit_catalog_csv_honours_explicit_backup_dir(tmp_path: Path) -> None:
+    """A caller-supplied backup directory overrides the default 'backups' folder."""
+    csv_path = tmp_path / "orbit_targets.csv"
+    backup_dir = tmp_path / "archive"
+    save_orbit_catalog_csv([OrbitModem(1, "1", "081", "Room", "SSID")], csv_path)
+    backup = save_orbit_catalog_csv(
+        [OrbitModem(1, "1", "081", "Room", "SSID")], csv_path, backup_dir
+    )
+    assert backup is not None
+    assert backup.parent == backup_dir
+    assert not (tmp_path / "backups").exists()
+
+
+def test_save_orbit_catalog_excel_roundtrip_creates_backup(tmp_path: Path) -> None:
+    """Excel save reloads through the loader and backs up the previous workbook."""
+    pytest.importorskip("openpyxl")
+    xlsx_path = tmp_path / _XLSX_NAME
+    modems = [
+        OrbitModem(1, "860000000000001", "081200000001", "Room 1", "SSID-1",
+                   status="ACTIVE", latitude=-6.2, longitude=106.8),
+        OrbitModem(2, "860000000000002", "081200000002", "Room 2", "SSID-2", status="IDLE"),
+    ]
+
+    assert save_orbit_catalog_excel(modems, xlsx_path) is None
+    original_bytes = xlsx_path.read_bytes()
+
+    reloaded = load_orbit_catalog_excel(xlsx_path)
+    assert [m.no for m in reloaded] == [1, 2]
+    assert reloaded[0].latitude == -6.2
+    assert reloaded[0].longitude == 106.8
+    assert reloaded[1].latitude is None
+
+    backup = save_orbit_catalog_excel(reloaded, xlsx_path)
+    assert backup is not None
+    assert backup.suffix == ".bak"
+    assert backup.read_bytes() == original_bytes
+
+
+def test_save_orbit_catalog_excel_drops_deleted_rows(tmp_path: Path) -> None:
+    """Deleting a modem and re-saving leaves no stale row behind."""
+    pytest.importorskip("openpyxl")
+    xlsx_path = tmp_path / _XLSX_NAME
+    modems = [OrbitModem(n, f"86000000000000{n}", f"08120000000{n}", f"Room {n}", f"SSID-{n}")
+              for n in (1, 2, 3)]
+    save_orbit_catalog_excel(modems, xlsx_path)
+
+    save_orbit_catalog_excel(remove_orbit_modem(modems, 2), xlsx_path)
+
+    reloaded = load_orbit_catalog_excel(xlsx_path)
+    assert [m.no for m in reloaded] == [1, 3]
+
+
+def test_upsert_orbit_modem_insert_update_and_renumber() -> None:
+    """upsert inserts new entries, replaces same-numbered ones, and renumbers."""
+    catalog = _default_orbit_catalog()
+
+    added = upsert_orbit_modem(
+        catalog,
+        OrbitModem(13, "860000000000013", "081200000013", "New Room", "Orbit-New"),
+    )
+    assert len(added) == 13
+    assert added[-1].no == 13
+
+    updated = upsert_orbit_modem(
+        added, OrbitModem(13, "860000000000013", "081200000013", "Renamed Room", "Orbit-New-2")
+    )
+    assert len(updated) == 13
+    renamed = next(m for m in updated if m.no == 13)
+    assert renamed.location == "Renamed Room"
+    assert renamed.ssid == "Orbit-New-2"
+
+    # Renumber 12 -> 20 drops the old entry rather than duplicating it
+    renumbered = upsert_orbit_modem(
+        updated,
+        OrbitModem(20, "860000000000012", "081200000012", "Room 20", "Orbit-20"),
+        original_no=12,
+    )
+    assert len(renumbered) == 13
+    assert not any(m.no == 12 for m in renumbered)
+    assert any(m.no == 20 for m in renumbered)
+
+
+def test_remove_orbit_modem_returns_catalog_without_entry() -> None:
+    """Removing a modem leaves the rest untouched; the source list is not mutated."""
+    catalog = _default_orbit_catalog()
+    reduced = remove_orbit_modem(catalog, 10)
+    assert len(reduced) == 11
+    assert not any(m.no == 10 for m in reduced)
+    assert len(catalog) == 12
+
+
+def test_persist_orbit_catalog_writes_only_the_explicit_target(tmp_path: Path) -> None:
+    """An explicit path is written exclusively; the other format is left alone."""
+    csv_path = tmp_path / "orbit_targets.csv"
+    catalog = _default_orbit_catalog()
+
+    result = persist_orbit_catalog(catalog, csv_path=csv_path)
+    assert result["csv_backup"] is None  # nothing to back up on the first write
+    assert result["excel_backup"] is None  # never touches the default workbook
+    assert csv_path.is_file()
+
+    result = persist_orbit_catalog(catalog, csv_path=csv_path)
+    assert result["csv_backup"] is not None
+    assert result["excel_backup"] is None
+
+    # An explicit Excel path is honoured even when the file does not exist yet
+    xlsx_path = tmp_path / _XLSX_NAME
+    result = persist_orbit_catalog(catalog, excel_path=xlsx_path)
+    assert result["csv_backup"] is None
+    assert result["excel_backup"] is None
+    assert xlsx_path.is_file()
+
+
+def _login(client: TestClient):
+    resp = client.post("/login", data={"username": "admin", "password": "admin123"})
+    assert resp.status_code in (200, 302, 303)
+    return resp.cookies
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("post", "/api/orbit/modem"),
+        ("put", "/api/orbit/modem/1"),
+        ("delete", "/api/orbit/modem/1"),
+    ],
+)
+def test_orbit_crud_endpoints_require_authentication(
+    client_with_db: TestClient, method: str, path: str
+) -> None:
+    """Anonymous callers cannot mutate the Orbit catalog."""
+    payload = {"no": 99, "location": "Room 99"}
+    if method == "delete":
+        resp = client_with_db.delete(path)
+    else:
+        resp = getattr(client_with_db, method)(path, json=payload)
+    assert resp.status_code in (401, 403, 303, 307)
+
+
+def test_api_orbit_modem_create_persists_and_audits(
+    client_with_db: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """POST creates a modem, writes the catalog, and records an audit entry."""
+    catalog_file = tmp_path / "orbit_targets.csv"
+    monkeypatch.setattr(settings, "orbit_catalog_file", str(catalog_file))
+    cookies = _login(client_with_db)
+
+    with patch("mrtg_cmp.web.app.audit_log") as mock_audit:
+        resp = client_with_db.post(
+            "/api/orbit/modem",
+            cookies=cookies,
+            json={
+                "no": 42,
+                "imei": "860000000000042",
+                "phone": "081200000042",
+                "location": "  Meeting Room  ",
+                "ssid": "Orbit-New",
+                "status": "idle",
+                "latitude": -6.2,
+                "longitude": 106.8,
+            },
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["no"] == 42
+    assert body["location"] == "Meeting Room"  # trimmed
+    assert body["status"] == "IDLE"  # normalised
+    assert body["latitude"] == -6.2
+    assert body["longitude"] == 106.8
+
+    # The new modem survives a round-trip through the catalog file
+    persisted = {m.no: m for m in load_orbit_catalog_csv(catalog_file)}
+    assert len(persisted) == 13  # the 12 defaults plus the new one
+    assert persisted[42].location == "Meeting Room"
+    assert persisted[42].status == "IDLE"
+    assert persisted[42].latitude == -6.2
+
+    mock_audit.assert_called_once()
+    assert mock_audit.call_args[0][0] == "ORBIT_CREATE"
+
+
+def test_api_orbit_modem_create_rejects_duplicates_and_bad_input(
+    client_with_db: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Duplicates, empty locations, and unknown statuses are rejected with 400."""
+    monkeypatch.setattr(settings, "orbit_catalog_file", str(tmp_path / "orbit_targets.csv"))
+    cookies = _login(client_with_db)
+
+    duplicate = client_with_db.post(
+        "/api/orbit/modem", cookies=cookies, json={"no": 1, "location": "Somewhere"}
+    )
+    assert duplicate.status_code == 400
+    assert "already exists" in duplicate.json()["detail"]
+
+    blank_location = client_with_db.post(
+        "/api/orbit/modem", cookies=cookies, json={"no": 99, "location": "   "}
+    )
+    assert blank_location.status_code == 400
+    assert "Location" in blank_location.json()["detail"]
+
+    bad_status = client_with_db.post(
+        "/api/orbit/modem",
+        cookies=cookies,
+        json={"no": 99, "location": "Room 99", "status": "Decommissioned"},
+    )
+    assert bad_status.status_code == 400
+    assert "Invalid status" in bad_status.json()["detail"]
+
+    bad_number = client_with_db.post(
+        "/api/orbit/modem", cookies=cookies, json={"no": 0, "location": "Room 99"}
+    )
+    assert bad_number.status_code == 400
+
+
+def test_api_orbit_modem_update_and_renumber(
+    client_with_db: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """PUT edits in place and can renumber, dropping the previous entry."""
+    catalog_file = tmp_path / "orbit_targets.csv"
+    monkeypatch.setattr(settings, "orbit_catalog_file", str(catalog_file))
+    cookies = _login(client_with_db)
+
+    with patch("mrtg_cmp.web.app.audit_log") as mock_audit:
+        resp = client_with_db.put(
+            "/api/orbit/modem/3",
+            cookies=cookies,
+            json={
+                "no": 3,
+                "imei": "860000000000003",
+                "phone": "081200000003",
+                "location": "Renamed Room",
+                "ssid": "Orbit-Renamed",
+                "status": "ACTIVE",
+                "latitude": -6.9,
+                "longitude": 107.1,
+            },
+        )
+    assert resp.status_code == 200
+    assert resp.json()["location"] == "Renamed Room"
+    assert mock_audit.call_args[0][0] == "ORBIT_UPDATE"
+
+    persisted = {m.no: m for m in load_orbit_catalog_csv(catalog_file)}
+    assert persisted[3].location == "Renamed Room"
+    assert persisted[3].latitude == -6.9
+    assert persisted[3].longitude == 107.1
+
+    # Renumbering 3 -> 30 must not leave modem 3 behind
+    renumbered = client_with_db.put(
+        "/api/orbit/modem/3",
+        cookies=cookies,
+        json={"no": 30, "location": "Renamed Room", "ssid": "Orbit-Renamed", "status": "ACTIVE"},
+    )
+    assert renumbered.status_code == 200
+    persisted = {m.no: m for m in load_orbit_catalog_csv(catalog_file)}
+    assert 3 not in persisted
+    assert 30 in persisted
+
+    # Renumbering onto an existing modem is a conflict
+    conflict = client_with_db.put(
+        "/api/orbit/modem/30",
+        cookies=cookies,
+        json={"no": 4, "location": "Clash", "status": "ACTIVE"},
+    )
+    assert conflict.status_code == 400
+    assert "already exists" in conflict.json()["detail"]
+
+    missing = client_with_db.put(
+        "/api/orbit/modem/777",
+        cookies=cookies,
+        json={"no": 777, "location": "Nowhere", "status": "ACTIVE"},
+    )
+    assert missing.status_code == 404
+
+
+def test_api_orbit_modem_delete_removes_from_catalog(
+    client_with_db: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """DELETE drops the modem from disk, refreshes stats, and audits."""
+    catalog_file = tmp_path / "orbit_targets.csv"
+    monkeypatch.setattr(settings, "orbit_catalog_file", str(catalog_file))
+    cookies = _login(client_with_db)
+
+    with patch("mrtg_cmp.web.app.audit_log") as mock_audit:
+        resp = client_with_db.delete("/api/orbit/modem/10", cookies=cookies)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "deleted"
+    assert body["modem"] == 10
+    assert body["stats"]["all"] == 11
+    assert "ex_customer" not in body["stats"]
+    assert mock_audit.call_args[0][0] == "ORBIT_DELETE"
+
+    persisted = load_orbit_catalog_csv(catalog_file)
+    assert 10 not in {m.no for m in persisted}
+    assert len(persisted) == 11
+
+    missing = client_with_db.delete("/api/orbit/modem/10", cookies=cookies)
+    assert missing.status_code == 404
+
+
+def test_api_orbit_modem_crud_writes_excel_when_configured(
+    client_with_db: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An .xlsx catalog path routes the write through the Excel writer."""
+    pytest.importorskip("openpyxl")
+    catalog_file = tmp_path / _XLSX_NAME
+    monkeypatch.setattr(settings, "orbit_catalog_file", str(catalog_file))
+    cookies = _login(client_with_db)
+
+    resp = client_with_db.post(
+        "/api/orbit/modem",
+        cookies=cookies,
+        json={"no": 77, "location": "Spare Room", "status": "IDLE", "latitude": -6.1,
+              "longitude": 106.9},
+    )
+    assert resp.status_code == 200
+
+    persisted = load_orbit_catalog_excel(catalog_file)
+    assert 77 in {m.no for m in persisted}
+    added = next(m for m in persisted if m.no == 77)
+    assert added.latitude == -6.1
+    assert added.longitude == 106.9
+
+    # A second write backs the workbook up first
+    second = client_with_db.delete("/api/orbit/modem/77", cookies=cookies)
+    assert second.status_code == 200
+    backups = list((catalog_file.parent / "backups").glob(f"{DEFAULT_EXCEL_PATH.stem}_*.xlsx.bak"))
+    assert len(backups) == 1
+    assert 77 not in {m.no for m in load_orbit_catalog_excel(catalog_file)}
+
+
+def test_quota_burn_rate_classification_and_forecasting(tmp_path: Path) -> None:
+    """Test QuotaBurnRateTracker calculations, thresholds, and alert levels."""
+    from datetime import UTC, datetime, timedelta
+
+    from mrtg_cmp.orbit.burn_rate import (
+        QuotaBurnRateTracker,
+        classify_alert_level,
+        format_burn_alert_message,
+    )
+    from mrtg_cmp.orbit.scraper import OrbitModemStatus
+    from mrtg_cmp.orbit.targets import OrbitModem
+
+    # Direct threshold classification
+    assert classify_alert_level(2.5, 50.0) == "CRITICAL"
+    assert classify_alert_level(10.0, 4.0) == "CRITICAL"
+    assert classify_alert_level(5.0, 30.0) == "WARNING"
+    assert classify_alert_level(20.0, 10.0) == "WARNING"
+    assert classify_alert_level(15.0, 40.0) == "NORMAL"
+    assert classify_alert_level(None, 40.0) == "NORMAL"
+
+    # Tracker rolling calculation
+    tracker = QuotaBurnRateTracker(tmp_path / "burn_history.json")
+    t0 = datetime(2026, 8, 28, 10, 0, tzinfo=UTC)
+    t1 = t0 + timedelta(days=1)
+    t2 = t1 + timedelta(days=1)
+
+    imei = "860123456789012"
+    tracker.record_snapshot(imei, 100.0, 100.0, timestamp=t0)
+    tracker.record_snapshot(imei, 95.0, 100.0, timestamp=t1)
+    tracker.record_snapshot(imei, 90.0, 100.0, timestamp=t2)
+
+    modem = OrbitModem(no=1, imei=imei, phone="081234567890", location="Room A", ssid="Orbit-RoomA")
+    status = OrbitModemStatus(target=modem, total_remaining_gb=90.0, total_quota_gb=100.0)
+    res = tracker.compute(imei, status)
+
+    assert res.burn_rate_gb_per_day is not None
+    assert round(res.burn_rate_gb_per_day, 1) == 5.0
+    assert res.days_until_exhaustion is not None
+    assert round(res.days_until_exhaustion, 1) == 18.0
+    assert res.alert_level == "NORMAL"
+
+    # Critical alert message formatting
+    msg = format_burn_alert_message(res)
+    assert "QUOTA BURN-RATE ALERT" in msg
+    assert "Room A" in msg
 

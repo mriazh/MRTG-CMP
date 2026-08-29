@@ -1,0 +1,736 @@
+{% extends "base.html" %}
+
+{% block nav_logs %}active{% endblock %}
+{% block nav_mrtg %}{% endblock %}
+
+{% block title %}System Logs - {{ app_title | default("MRTG Traffic Monitor") }}{% endblock %}
+
+{% block extra_styles %}
+.logs-page-container {
+    max-width: 1720px;
+    margin: 0 auto;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+}
+
+.logs-header-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 1rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.logs-title-group h2 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--text-main);
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+.logs-subtitle {
+    margin: 0.2rem 0 0 0;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+.logs-toolbar-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.toolbar-left-group {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.toolbar-right-group {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+/* Level filter pills */
+.level-pills {
+    display: inline-flex;
+    align-items: center;
+    background: var(--bg);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 0.2rem;
+    gap: 0.2rem;
+}
+
+.level-pill {
+    padding: 0.3rem 0.75rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    border-radius: 4px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.level-pill:hover {
+    color: var(--text-main);
+    background: rgba(125, 125, 125, 0.1);
+}
+
+.level-pill.active {
+    background: var(--primary);
+    color: #FFFFFF;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+
+.level-pill[data-level="INFO"].active {
+    background: #0284C7;
+    color: #FFFFFF;
+}
+
+.level-pill[data-level="WARNING"].active {
+    background: #D97706;
+    color: #FFFFFF;
+}
+
+.level-pill[data-level="ERROR"].active {
+    background: #DC2626;
+    color: #FFFFFF;
+}
+
+/* Search Input */
+.search-input-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+}
+
+.search-input-icon {
+    position: absolute;
+    left: 0.65rem;
+    color: var(--text-muted);
+    pointer-events: none;
+}
+
+.search-input {
+    padding: 0.4rem 2rem 0.4rem 2.1rem;
+    font-size: 0.82rem;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background: var(--input-bg);
+    color: var(--text-main);
+    width: 240px;
+    transition: all 0.15s ease;
+}
+
+.search-input:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
+    width: 280px;
+}
+
+.search-clear-btn {
+    position: absolute;
+    right: 0.5rem;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 1.1rem;
+    cursor: pointer;
+    display: none;
+    padding: 0.1rem 0.3rem;
+    line-height: 1;
+}
+
+.search-clear-btn:hover {
+    color: var(--text-main);
+}
+
+/* Lines Selector */
+.lines-select-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.lines-select {
+    padding: 0.35rem 0.6rem;
+    font-size: 0.8rem;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background: var(--input-bg);
+    color: var(--text-main);
+    cursor: pointer;
+}
+
+/* Auto-Refresh & Live Indicator */
+.auto-refresh-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0.6rem;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background: var(--bg);
+}
+
+.toggle-switch-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    cursor: pointer;
+    user-select: none;
+    font-size: 0.8rem;
+    color: var(--text-main);
+    margin: 0;
+}
+
+.live-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+.live-indicator.active {
+    color: #10B981;
+}
+
+.pulse-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: #64748B;
+    display: inline-block;
+    transition: background-color 0.2s ease;
+}
+
+.live-indicator.active .pulse-dot {
+    background-color: #10B981;
+    box-shadow: 0 0 0 rgba(16, 185, 129, 0.7);
+    animation: live-pulse 2s infinite;
+}
+
+@keyframes live-pulse {
+    0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+    70% { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+}
+
+/* Terminal Viewer */
+.terminal-card {
+    background: #0B0F19;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+    display: flex;
+    flex-direction: column;
+}
+
+.terminal-header {
+    background: #111827;
+    border-bottom: 1px solid #1F2937;
+    padding: 0.5rem 1rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.78rem;
+    color: #94A3B8;
+}
+
+.terminal-header-title {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-family: 'JetBrains Mono', 'Courier New', monospace;
+    font-weight: 600;
+    color: #E2E8F0;
+}
+
+.terminal-status-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    background: rgba(56, 189, 248, 0.1);
+    color: #38BDF8;
+    border: 1px solid rgba(56, 189, 248, 0.2);
+    font-size: 0.72rem;
+}
+
+.terminal-viewer {
+    font-family: 'JetBrains Mono', 'Courier New', monospace;
+    font-size: 0.8rem;
+    background: #0B0F19;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 1rem;
+    max-height: 70vh;
+    overflow-y: auto;
+    color: #F8FAFC;
+    line-height: 1.6;
+    min-height: 380px;
+}
+
+.log-row {
+    padding: 0.12rem 0;
+    word-break: break-all;
+    white-space: pre-wrap;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    transition: background-color 0.1s ease;
+}
+
+.log-row:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.log-ts {
+    color: #64748B;
+    flex-shrink: 0;
+    user-select: none;
+}
+
+.log-token-error {
+    color: #EF4444;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+
+.log-token-warning {
+    color: #F59E0B;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+
+.log-token-info {
+    color: #38BDF8;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+
+.log-token-audit {
+    color: #A855F7;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+
+.log-body {
+    color: #E2E8F0;
+    flex: 1;
+}
+
+/* Empty State */
+.logs-empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 4rem 1rem;
+    text-align: center;
+}
+
+.logs-empty-state svg {
+    color: #475569;
+    margin-bottom: 0.75rem;
+}
+
+.logs-empty-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #94A3B8;
+    margin: 0 0 0.35rem 0;
+}
+
+.logs-empty-desc {
+    font-size: 0.8rem;
+    color: #64748B;
+    max-width: 360px;
+    margin: 0;
+}
+{% endblock %}
+
+{% block content %}
+<div class="logs-page-container">
+    <div class="logs-header-bar">
+        <div class="logs-title-group">
+            <h2>
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color: var(--primary);">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                    <line x1="16" y1="13" x2="8" y2="13"></line>
+                    <line x1="16" y1="17" x2="8" y2="17"></line>
+                    <polyline points="10 9 9 9 8 9"></polyline>
+                </svg>
+                System Logs
+                <span class="system-service-badge" style="font-size: 0.72rem; font-weight: 500; color: var(--text-muted); padding: 0.15rem 0.45rem; background: var(--bg); border: 1px solid var(--border-color); border-radius: 4px;">System &amp; Service Logs</span>
+            </h2>
+            <p class="logs-subtitle">Real-time daemon records and administrative audit trail</p>
+        </div>
+        <div class="toolbar-right-group">
+            <button type="button" id="btn-copy-logs" class="btn btn-secondary" title="Copy visible logs to clipboard">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+                <span id="copy-btn-text">Copy to Clipboard</span>
+            </button>
+            <a href="/api/logs/download" id="btn-download-logs" class="btn btn-secondary" title="Download raw log file">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="7 10 12 15 17 10"></polyline>
+                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+                Download File
+            </a>
+            <button type="button" id="btn-refresh-logs" class="btn btn-primary" title="Refresh logs from server">
+                <svg id="refresh-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <polyline points="23 4 23 10 17 10"></polyline>
+                    <polyline points="1 20 1 14 7 14"></polyline>
+                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                </svg>
+                Refresh
+            </button>
+        </div>
+    </div>
+
+    <div class="logs-toolbar-card">
+        <div class="toolbar-left-group">
+            <div class="level-pills" role="group" aria-label="Filter by log level">
+                <button type="button" class="level-pill active" data-level="ALL">ALL</button>
+                <button type="button" class="level-pill" data-level="INFO">INFO</button>
+                <button type="button" class="level-pill" data-level="WARNING">WARNING</button>
+                <button type="button" class="level-pill" data-level="ERROR">ERROR</button>
+            </div>
+
+            <div class="search-input-wrap">
+                <svg class="search-input-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                <input type="text" id="log-search-input" class="search-input" placeholder="Search records..." autocomplete="off">
+                <button type="button" id="log-search-clear" class="search-clear-btn" aria-label="Clear search">&times;</button>
+            </div>
+        </div>
+
+        <div class="toolbar-right-group">
+            <div class="lines-select-wrap">
+                <label for="log-lines-select">Lines:</label>
+                <select id="log-lines-select" class="lines-select">
+                    <option value="100">100</option>
+                    <option value="200" selected>200</option>
+                    <option value="500">500</option>
+                </select>
+            </div>
+
+            <div class="auto-refresh-wrap">
+                <label class="toggle-switch-label" for="auto-refresh-toggle">
+                    <input type="checkbox" id="auto-refresh-toggle" checked style="cursor: pointer;">
+                    <span class="live-indicator active" id="live-indicator">
+                        <span class="pulse-dot"></span>
+                        <span id="live-text">Live: 5s</span>
+                    </span>
+                </label>
+            </div>
+        </div>
+    </div>
+
+    <div class="terminal-card">
+        <div class="terminal-header">
+            <div class="terminal-header-title">
+                <span class="terminal-status-tag" id="log-count-tag">0 records</span>
+                <span id="log-file-display" style="color: #64748B;">{{ log_file | default("logs/mrtg-cmp.log") }}</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 0.75rem;">
+                <label style="display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.75rem; cursor: pointer; color: #94A3B8;">
+                    <input type="checkbox" id="auto-scroll-toggle" checked style="cursor: pointer;">
+                    Auto-scroll
+                </label>
+                <span id="last-updated-text" style="color: #64748B; font-size: 0.72rem;">Updated just now</span>
+            </div>
+        </div>
+        <div id="logs-terminal" class="terminal-viewer" role="region" aria-label="Log records viewer">
+            <div id="logs-empty-state" class="logs-empty-state" style="display: none;">
+                <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                <p class="logs-empty-title">No log entries found</p>
+                <p class="logs-empty-desc">No records match the selected level filter or search term.</p>
+            </div>
+            <div id="logs-rows-container"></div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        let currentLevel = 'ALL';
+        let currentSearch = '';
+        let currentLinesCount = 200;
+        let rawLogLines = [];
+        let autoRefreshTimer = null;
+        let isFetching = false;
+
+        const terminal = document.getElementById('logs-terminal');
+        const rowsContainer = document.getElementById('logs-rows-container');
+        const emptyState = document.getElementById('logs-empty-state');
+        const searchInput = document.getElementById('log-search-input');
+        const searchClearBtn = document.getElementById('log-search-clear');
+        const linesSelect = document.getElementById('log-lines-select');
+        const autoRefreshToggle = document.getElementById('auto-refresh-toggle');
+        const autoScrollToggle = document.getElementById('auto-scroll-toggle');
+        const liveIndicator = document.getElementById('live-indicator');
+        const liveText = document.getElementById('live-text');
+        const refreshBtn = document.getElementById('btn-refresh-logs');
+        const refreshIcon = document.getElementById('refresh-icon');
+        const copyBtn = document.getElementById('btn-copy-logs');
+        const copyBtnText = document.getElementById('copy-btn-text');
+        const logCountTag = document.getElementById('log-count-tag');
+        const logFileDisplay = document.getElementById('log-file-display');
+        const lastUpdatedText = document.getElementById('last-updated-text');
+        const levelPills = document.querySelectorAll('.level-pill');
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function formatLogLine(line) {
+            const escaped = escapeHtml(line);
+
+            // 1. Extract optional timestamp at start: YYYY-MM-DD HH:MM:SS
+            let formatted = escaped.replace(
+                /^(\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2})/,
+                '<span class="log-ts" style="color: #64748B;">$1</span>'
+            );
+
+            // 2. Format level tokens
+            formatted = formatted.replace(
+                /\[ERROR\]/g,
+                '<span class="log-token-error" style="color: #EF4444; font-weight: 700;">[ERROR]</span>'
+            );
+            formatted = formatted.replace(
+                /\[WARNING\]/g,
+                '<span class="log-token-warning" style="color: #F59E0B; font-weight: 700;">[WARNING]</span>'
+            );
+            formatted = formatted.replace(
+                /\[INFO\]/g,
+                '<span class="log-token-info" style="color: #38BDF8; font-weight: 700;">[INFO]</span>'
+            );
+
+            // 3. Format [AUDIT] token in purple #A855F7
+            formatted = formatted.replace(
+                /\[AUDIT\]/g,
+                '<span class="log-token-audit" style="color: #A855F7; font-weight: 700;">[AUDIT]</span>'
+            );
+
+            return `<div class="log-row"><span class="log-body">${formatted}</span></div>`;
+        }
+
+        async function fetchLogs() {
+            if (isFetching) return;
+            isFetching = true;
+            if (refreshIcon) {
+                refreshIcon.style.transition = 'transform 0.5s ease';
+                refreshIcon.style.transform = 'rotate(180deg)';
+            }
+
+            try {
+                const params = new URLSearchParams({
+                    lines: currentLinesCount.toString(),
+                    level: currentLevel,
+                });
+                if (currentSearch) {
+                    params.append('search', currentSearch);
+                }
+
+                const response = await fetch(`/api/logs/tail?${params.toString()}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP error ${response.status}`);
+                }
+                const data = await response.json();
+                rawLogLines = data.lines || [];
+
+                if (logCountTag) {
+                    logCountTag.textContent = `${data.total_count} records`;
+                }
+                if (logFileDisplay && data.log_file) {
+                    logFileDisplay.textContent = data.log_file;
+                }
+                if (lastUpdatedText) {
+                    const now = new Date();
+                    lastUpdatedText.textContent = `Updated ${now.toLocaleTimeString()}`;
+                }
+
+                renderLogs();
+            } catch (err) {
+                console.error('Failed to tail logs:', err);
+            } finally {
+                isFetching = false;
+                if (refreshIcon) {
+                    setTimeout(() => {
+                        refreshIcon.style.transform = 'rotate(0deg)';
+                    }, 500);
+                }
+            }
+        }
+
+        function renderLogs() {
+            if (!rowsContainer || !emptyState) return;
+
+            if (rawLogLines.length === 0) {
+                rowsContainer.innerHTML = '';
+                emptyState.style.display = 'flex';
+                return;
+            }
+
+            emptyState.style.display = 'none';
+            rowsContainer.innerHTML = rawLogLines.map(formatLogLine).join('');
+
+            if (autoScrollToggle && autoScrollToggle.checked && terminal) {
+                terminal.scrollTop = terminal.scrollHeight;
+            }
+        }
+
+        // Level Pill selection
+        levelPills.forEach(pill => {
+            pill.addEventListener('click', () => {
+                levelPills.forEach(p => p.classList.remove('active'));
+                pill.classList.add('active');
+                currentLevel = pill.getAttribute('data-level') || 'ALL';
+                fetchLogs();
+            });
+        });
+
+        // Search Input & Debounce
+        let searchDebounceTimer = null;
+        if (searchInput) {
+            searchInput.addEventListener('input', (e) => {
+                const val = e.target.value.trim();
+                currentSearch = val;
+                if (searchClearBtn) {
+                    searchClearBtn.style.display = val ? 'block' : 'none';
+                }
+                clearTimeout(searchDebounceTimer);
+                searchDebounceTimer = setTimeout(() => {
+                    fetchLogs();
+                }, 250);
+            });
+        }
+
+        if (searchClearBtn) {
+            searchClearBtn.addEventListener('click', () => {
+                if (searchInput) {
+                    searchInput.value = '';
+                }
+                currentSearch = '';
+                searchClearBtn.style.display = 'none';
+                fetchLogs();
+            });
+        }
+
+        // Max Lines Selector
+        if (linesSelect) {
+            linesSelect.addEventListener('change', (e) => {
+                currentLinesCount = parseInt(e.target.value, 10) || 200;
+                fetchLogs();
+            });
+        }
+
+        // Manual Refresh Button
+        if (refreshBtn) {
+            refreshBtn.addEventListener('click', () => {
+                fetchLogs();
+            });
+        }
+
+        // Copy to Clipboard Button
+        if (copyBtn) {
+            copyBtn.addEventListener('click', async () => {
+                const textToCopy = rawLogLines.join('\n');
+                if (!textToCopy) return;
+
+                try {
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        await navigator.clipboard.writeText(textToCopy);
+                    } else {
+                        const ta = document.createElement('textarea');
+                        ta.value = textToCopy;
+                        document.body.appendChild(ta);
+                        ta.select();
+                        document.execCommand('copy');
+                        document.body.removeChild(ta);
+                    }
+                    if (copyBtnText) {
+                        copyBtnText.textContent = 'Copied!';
+                        setTimeout(() => {
+                            copyBtnText.textContent = 'Copy to Clipboard';
+                        }, 2000);
+                    }
+                } catch (err) {
+                    console.error('Failed to copy text:', err);
+                }
+            });
+        }
+
+        // Auto Refresh Timer
+        function setupAutoRefresh() {
+            if (autoRefreshTimer) {
+                clearInterval(autoRefreshTimer);
+                autoRefreshTimer = null;
+            }
+
+            if (autoRefreshToggle && autoRefreshToggle.checked) {
+                if (liveIndicator) liveIndicator.classList.add('active');
+                if (liveText) liveText.textContent = 'Live: 5s';
+                autoRefreshTimer = setInterval(() => {
+                    fetchLogs();
+                }, 5000);
+            } else {
+                if (liveIndicator) liveIndicator.classList.remove('active');
+                if (liveText) liveText.textContent = 'Paused';
+            }
+        }
+
+        if (autoRefreshToggle) {
+            autoRefreshToggle.addEventListener('change', setupAutoRefresh);
+        }
+
+        // Initial Load
+        fetchLogs();
+        setupAutoRefresh();
+    });
+</script>
+{% endblock %}

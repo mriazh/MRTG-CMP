@@ -4,14 +4,20 @@ from __future__ import annotations
 
 import json
 import threading
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, Form, Query, Request, status
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, status
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -31,13 +37,17 @@ from ..console import console_manager, execute_routeros_command
 from ..db import Database
 from ..export import export_csv, export_excel
 from ..graph_renderer import format_engineering_bits, render_traffic_graph
-from ..logging_setup import configure_logging
+from ..logging_setup import audit_log, configure_logging
 from ..netcare.query import NetcareQueryTracker, estimate_seconds, partition_for
 from ..netcare.service import build_service_from_settings
 from ..netcare.targets import (
     DEFAULT_TARGETS,
     REGION_ADDRESSES,
     REGION_ORDER,
+    UNCLASSIFIED_SERVICE,
+    NetcareTarget,
+    NetcareTargetType,
+    parse_service_type,
     region_counts,
     region_label,
     resolve_targets,
@@ -46,9 +56,20 @@ from ..netcare.targets import (
     service_description,
     service_label,
 )
+from ..orbit.burn_rate import QuotaBurnRateTracker
 from ..orbit.cache import OrbitCache
+from ..orbit.scraper import OrbitModemStatus
 from ..orbit.service import OrbitService
-from ..orbit.targets import filter_stats, resolve_orbit_catalog
+from ..orbit.targets import (
+    VALID_STATUSES,
+    OrbitModem,
+    filter_stats,
+    persist_orbit_catalog,
+    remove_orbit_modem,
+    resolve_orbit_catalog,
+    upsert_orbit_modem,
+)
+from .map_data import MAP_LEGEND, build_map_markers
 
 WIB_OFFSET = timedelta(hours=7)
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -492,6 +513,8 @@ def dashboard_view(
     c_start = display_st[:16]
     c_end = display_et[:16]
 
+    netcare_context = _netcare_context(netcare_day)
+
     return templates.TemplateResponse(
         request=request,
         name="dashboard.html",
@@ -520,7 +543,8 @@ def dashboard_view(
             "export_csv_url": export_csv_url,
             "display_start": display_st,
             "display_end": display_et,
-            **_netcare_context(netcare_day),
+            **netcare_context,
+            **_map_context(netcare_context["netcare_cards"]),
         },
     )
 
@@ -543,12 +567,21 @@ def _orbit_service() -> OrbitService:
         return _orbit_service_instance
 
 
+def _orbit_burn_tracker() -> QuotaBurnRateTracker:
+    """Return QuotaBurnRateTracker instance configured from settings."""
+    return QuotaBurnRateTracker(settings.orbit_cache_dir / "burn_rate_history.json")
+
+
 def _orbit_context() -> dict[str, Any]:
     """Assemble context data for the Telkomsel Orbit modem dashboard."""
     catalog = resolve_orbit_catalog(settings.orbit_catalog_file)
     cache = _orbit_cache()
     modems = cache.get_or_seed(catalog)
     stats = filter_stats([m.target for m in modems])
+
+    tracker = _orbit_burn_tracker()
+    tracker.record_statuses(modems)
+    burn_results = {r.imei: r for r in tracker.compute_all(modems)}
 
     total_remaining = round(sum(m.total_remaining_gb for m in modems), 2)
     total_quota = round(sum(m.total_quota_gb for m in modems), 2)
@@ -560,6 +593,7 @@ def _orbit_context() -> dict[str, Any]:
 
     return {
         "modems": modems,
+        "burn_results": burn_results,
         "stats": stats,
         "summary": {
             "total_modems": len(modems),
@@ -570,6 +604,56 @@ def _orbit_context() -> dict[str, Any]:
             "imei_pending_count": imei_pending_count,
         },
     }
+
+
+def _map_orbit_statuses() -> list[OrbitModemStatus]:
+    """Return Orbit modem statuses for the map, without seeding the cache.
+
+    ``_orbit_context`` calls ``get_or_seed``, which *writes* demo data on first
+    view. The map is part of the dashboard and should not create cache files as
+    a side effect of rendering, so it reads the cache and falls back to bare
+    catalog modems (coordinates included) when there is nothing cached yet.
+    """
+
+    catalog = resolve_orbit_catalog(settings.orbit_catalog_file)
+    cached = _orbit_cache().load()
+    if cached is not None:
+        return cached
+    return [OrbitModemStatus(target=modem) for modem in catalog]
+
+
+def _map_markers(netcare_cards: Sequence[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """Build the dashboard map markers from Netcare links and Orbit modems."""
+
+    return build_map_markers(netcare_cards or [], _map_orbit_statuses())
+
+
+def _map_context(netcare_cards: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """Build the dashboard context for the interactive Leaflet map section."""
+
+    markers = _map_markers(netcare_cards)
+    return {
+        "map_markers": markers,
+        "map_marker_count": len(markers),
+        "map_legend": MAP_LEGEND,
+        "map_enabled": bool(markers),
+    }
+
+
+@app.get("/api/map/points")
+def api_map_points(
+    netcare_day: str | None = Query(None),
+    current_user: dict[str, Any] = Depends(require_authenticated_user),
+) -> Response:
+    """Return every located Netcare link and Orbit modem for the Leaflet map.
+
+    The dashboard seeds its map from the server-rendered payload, so this exists
+    for the auto-refresh cycle: the browser re-pulls markers on the same cadence
+    as the card grids and repaints in place instead of reloading the page.
+    """
+
+    markers = _map_markers(_netcare_context(netcare_day)["netcare_cards"])
+    return JSONResponse({"markers": markers, "count": len(markers)})
 
 
 # 2b. TelkomCare Netcare Branch Links & Telkomsel Orbit Page
@@ -634,6 +718,148 @@ async def api_orbit_sync(
     )
 
 
+class OrbitModemRequest(BaseModel):
+    no: int
+    imei: str = ""
+    phone: str = ""
+    location: str = ""
+    ssid: str = ""
+    status: str = "ACTIVE"
+    latitude: float | None = None
+    longitude: float | None = None
+
+
+def _orbit_catalog_from_request(payload: OrbitModemRequest) -> OrbitModem:
+    """Validate an OrbitModemRequest and build the target modem."""
+    if payload.no < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Modem number must be a positive integer",
+        )
+    status_value = payload.status.strip().upper() or "ACTIVE"
+    if status_value not in VALID_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Invalid status '{payload.status}'; "
+                f"expected one of {', '.join(VALID_STATUSES)}"
+            ),
+        )
+    location = payload.location.strip()
+    if not location:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Location cannot be empty",
+        )
+    return OrbitModem(
+        no=payload.no,
+        imei=payload.imei.strip(),
+        phone=payload.phone.strip(),
+        location=location,
+        ssid=payload.ssid.strip(),
+        status=status_value,
+        latitude=payload.latitude,
+        longitude=payload.longitude,
+    )
+
+
+def _persist_orbit_change(catalog: list[OrbitModem]) -> None:
+    """Persist an edited catalog to disk and refresh the Orbit cache.
+
+    The configured catalog file decides the writer: an ``.xlsx`` path is saved
+    through openpyxl, a ``.csv`` path through the CSV writer, and with no
+    configured file both known catalog locations are updated when they exist.
+    """
+    configured = settings.orbit_catalog_file
+    if configured:
+        target = Path(configured)
+        if target.suffix.lower() == ".xlsx":
+            persist_orbit_catalog(catalog, excel_path=target)
+        else:
+            persist_orbit_catalog(catalog, csv_path=target)
+    else:
+        persist_orbit_catalog(catalog)
+    _orbit_cache().reconcile(catalog)
+
+
+@app.post("/api/orbit/modem")
+def api_create_orbit_modem(
+    payload: OrbitModemRequest,
+    current_user: dict[str, Any] = Depends(require_authenticated_user),
+) -> dict[str, Any]:
+    """Create a new Orbit modem target in the catalog."""
+    modem = _orbit_catalog_from_request(payload)
+    catalog = resolve_orbit_catalog(settings.orbit_catalog_file)
+    if any(m.no == modem.no for m in catalog):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Modem number '{modem.no}' already exists",
+        )
+    updated = upsert_orbit_modem(catalog, modem)
+    _persist_orbit_change(updated)
+    user = str(current_user.get("username", "system"))
+    audit_log("ORBIT_CREATE", user, f"created modem {modem.no} ({modem.location})")
+    return modem.as_dict()
+
+
+@app.put("/api/orbit/modem/{no}")
+def api_update_orbit_modem(
+    no: int,
+    payload: OrbitModemRequest,
+    current_user: dict[str, Any] = Depends(require_authenticated_user),
+) -> dict[str, Any]:
+    """Update an existing Orbit modem target."""
+    modem = _orbit_catalog_from_request(payload)
+    catalog = resolve_orbit_catalog(settings.orbit_catalog_file)
+    if not any(m.no == no for m in catalog):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Modem '{no}' not found",
+        )
+    if modem.no != no and any(m.no == modem.no for m in catalog):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Modem number '{modem.no}' already exists",
+        )
+    updated = upsert_orbit_modem(catalog, modem, original_no=no)
+    _persist_orbit_change(updated)
+    user = str(current_user.get("username", "system"))
+    audit_log("ORBIT_UPDATE", user, f"updated modem {no} ({modem.location})")
+    return modem.as_dict()
+
+
+@app.delete("/api/orbit/modem/{no}")
+def api_delete_orbit_modem(
+    no: int,
+    current_user: dict[str, Any] = Depends(require_authenticated_user),
+) -> dict[str, Any]:
+    """Delete an Orbit modem target."""
+    catalog = resolve_orbit_catalog(settings.orbit_catalog_file)
+    if not any(m.no == no for m in catalog):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Modem '{no}' not found",
+        )
+    updated = remove_orbit_modem(catalog, no)
+    _persist_orbit_change(updated)
+    user = str(current_user.get("username", "system"))
+    audit_log("ORBIT_DELETE", user, f"deleted modem {no}")
+    ctx = _orbit_context()
+    return {"status": "deleted", "modem": no, "stats": ctx["stats"]}
+
+
+class NetcareTargetRequest(BaseModel):
+    target: str
+    type: str
+    name: str
+    address: str = ""
+    region: str
+    service_type: str = UNCLASSIFIED_SERVICE
+    ocr_enabled: bool = True
+    latitude: float | None = None
+    longitude: float | None = None
+
+
 @app.get("/api/netcare/targets")
 def api_netcare_targets(
     day: str | None = Query(None),
@@ -641,6 +867,115 @@ def api_netcare_targets(
 ) -> dict[str, Any]:
     """Return every Netcare branch target with status, timestamp, and image URL."""
     return _netcare_context(day)
+
+
+@app.post("/api/netcare/targets")
+def api_create_netcare_target(
+    payload: NetcareTargetRequest,
+    current_user: dict[str, Any] = Depends(require_authenticated_user),
+) -> dict[str, Any]:
+    """Create a new Netcare branch target in the catalog."""
+    service = _netcare_service()
+    target_id = payload.target.strip()
+    if not target_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Target ID cannot be empty",
+        )
+    if any(t.target == target_id for t in service.targets):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Target ID '{target_id}' already exists",
+        )
+    parsed_type = NetcareTargetType.parse(payload.type)
+    if parsed_type is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid target type '{payload.type}'",
+        )
+    service_type = parse_service_type(payload.service_type) or UNCLASSIFIED_SERVICE
+    new_target = NetcareTarget(
+        target=target_id,
+        type=parsed_type,
+        name=payload.name.strip() or target_id,
+        address=payload.address.strip(),
+        region=payload.region.strip(),
+        ocr_enabled=payload.ocr_enabled,
+        service_type=service_type,
+        latitude=payload.latitude,
+        longitude=payload.longitude,
+    )
+    service.upsert_target(new_target)
+    user = str(current_user.get("username", "system"))
+    audit_log("NETCARE_CREATE", user, f"created target {target_id}")
+    return new_target.as_dict()
+
+
+@app.put("/api/netcare/targets/{target_id}")
+def api_update_netcare_target(
+    target_id: str,
+    payload: NetcareTargetRequest,
+    current_user: dict[str, Any] = Depends(require_authenticated_user),
+) -> dict[str, Any]:
+    """Update an existing Netcare branch target."""
+    service = _netcare_service()
+    existing = next((t for t in service.targets if t.target == target_id), None)
+    if existing is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Target '{target_id}' not found",
+        )
+    new_target_id = payload.target.strip()
+    if not new_target_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Target ID cannot be empty",
+        )
+    if new_target_id != target_id and any(t.target == new_target_id for t in service.targets):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Target ID '{new_target_id}' already exists",
+        )
+    parsed_type = NetcareTargetType.parse(payload.type)
+    if parsed_type is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid target type '{payload.type}'",
+        )
+    service_type = parse_service_type(payload.service_type) or UNCLASSIFIED_SERVICE
+    updated_target = NetcareTarget(
+        target=new_target_id,
+        type=parsed_type,
+        name=payload.name.strip() or new_target_id,
+        address=payload.address.strip(),
+        region=payload.region.strip(),
+        ocr_enabled=payload.ocr_enabled,
+        service_type=service_type,
+        latitude=payload.latitude,
+        longitude=payload.longitude,
+    )
+    service.upsert_target(updated_target, original_id=target_id)
+    user = str(current_user.get("username", "system"))
+    audit_log("NETCARE_UPDATE", user, f"updated target {target_id}")
+    return updated_target.as_dict()
+
+
+@app.delete("/api/netcare/targets/{target_id}")
+def api_delete_netcare_target(
+    target_id: str,
+    current_user: dict[str, Any] = Depends(require_authenticated_user),
+) -> dict[str, str]:
+    """Delete a Netcare branch target."""
+    service = _netcare_service()
+    removed = service.remove_target(target_id)
+    if not removed:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Target '{target_id}' not found",
+        )
+    user = str(current_user.get("username", "system"))
+    audit_log("NETCARE_DELETE", user, f"deleted target {target_id}")
+    return {"status": "deleted", "target": target_id}
 
 
 @app.post("/api/netcare/query")
@@ -985,6 +1320,88 @@ def console_view(
             "current_user": current_user,
             "router_target": f"{settings.routeros_host}:{settings.routeros_port}",
         },
+    )
+
+
+@app.get("/logs", response_class=HTMLResponse)
+def logs_view(
+    request: Request,
+    current_user: dict[str, Any] = Depends(require_authenticated_user),
+) -> Any:
+    return templates.TemplateResponse(
+        request=request,
+        name="logs.html",
+        context={
+            "site_name": settings.site_name,
+            "app_title": settings.app_title,
+            "current_user": current_user,
+            "log_file": str(settings.log_file) if settings.log_file else "",
+        },
+    )
+
+
+@app.get("/api/logs/tail")
+def api_logs_tail(
+    lines: int = Query(default=200, ge=10, le=1000),
+    level: str = Query(default="ALL"),
+    search: str | None = Query(default=None),
+    current_user: dict[str, Any] = Depends(require_authenticated_user),
+) -> dict[str, Any]:
+    """Return the tail of the system log file with level and substring filters."""
+    log_path = Path(settings.log_file) if settings.log_file else None
+    if not log_path or not log_path.is_file():
+        return {
+            "lines": [],
+            "total_count": 0,
+            "log_file": str(settings.log_file) if settings.log_file is not None else "",
+        }
+
+    try:
+        content = log_path.read_text(encoding="utf-8", errors="replace")
+        raw_lines = [line for line in content.splitlines() if line.strip()]
+    except Exception:
+        raw_lines = []
+
+    # Extracts last `lines` records
+    tail_lines = raw_lines[-lines:] if lines > 0 else raw_lines
+
+    # Filters by `level` (matching `[INFO]`, `[WARNING]`, `[ERROR]` in line if level != "ALL")
+    level_filter = level.strip().upper()
+    if level_filter != "ALL":
+        level_tag = f"[{level_filter}]"
+        tail_lines = [line for line in tail_lines if level_tag in line]
+
+    # Filters by `search` (case-insensitive substring)
+    if search:
+        search_term = search.strip().lower()
+        if search_term:
+            tail_lines = [line for line in tail_lines if search_term in line.lower()]
+
+    return {
+        "lines": tail_lines,
+        "total_count": len(tail_lines),
+        "log_file": str(settings.log_file) if settings.log_file is not None else "",
+    }
+
+
+@app.get("/api/logs/download")
+def api_logs_download(
+    current_user: dict[str, Any] = Depends(require_authenticated_user),
+) -> Response:
+    """Download the system log file as a text/plain attachment."""
+    log_path = Path(settings.log_file) if settings.log_file else None
+    if not log_path or not log_path.is_file():
+        return Response(
+            content="",
+            media_type="text/plain",
+            headers={"Content-Disposition": 'attachment; filename="mrtg-cmp.log"'},
+        )
+
+    filename = log_path.name or "mrtg-cmp.log"
+    return FileResponse(
+        path=str(log_path),
+        media_type="text/plain",
+        filename=filename,
     )
 
 

@@ -25,10 +25,12 @@ from mrtg_cmp.netcare.targets import (
     default_catalog_path,
     find_target,
     load_catalog,
+    load_catalog_csv,
     parse_service_type,
     region_counts,
     region_label,
     resolve_targets,
+    save_catalog_csv,
     service_badge_class,
     service_counts,
     service_description,
@@ -606,3 +608,194 @@ def test_netcare_target_is_hashable_and_frozen() -> None:
     assert {target}
     with pytest.raises(AttributeError):
         target.name = "changed"  # type: ignore[misc]
+
+
+def test_netcare_target_latitude_longitude_as_dict() -> None:
+    default_target = NetcareTarget(
+        target="tgt-1",
+        type=NetcareTargetType.SID,
+        name="Default Loc",
+        address="Addr",
+        region="CGK",
+    )
+    assert default_target.latitude is None
+    assert default_target.longitude is None
+    d = default_target.as_dict()
+    assert d["latitude"] is None
+    assert d["longitude"] is None
+
+    custom_target = NetcareTarget(
+        target="tgt-2",
+        type=NetcareTargetType.SID,
+        name="Custom Loc",
+        address="Addr",
+        region="SUB",
+        latitude=-7.2575,
+        longitude=112.7521,
+    )
+    assert custom_target.latitude == -7.2575
+    assert custom_target.longitude == 112.7521
+    d2 = custom_target.as_dict()
+    assert d2["latitude"] == -7.2575
+    assert d2["longitude"] == 112.7521
+
+
+def test_load_catalog_csv_reads_coordinates(tmp_path: Path) -> None:
+    csv_file = tmp_path / "targets_with_coords.csv"
+    csv_file.write_text(
+        "type,target,name,address,region,ocr_enabled,service_type,latitude,longitude\n"
+        "SID,tgt-001,Branch Jakarta,Thamrin,CGK,true,Astinet,-6.2088,106.8456\n"
+        "Graph-title,tgt-002,Branch Surabaya,Basuki,SUB,true,Metro-E,,\n"
+        "SID,tgt-003,Branch BadCoord,Street,DPS,true,VPN IP,bad_lat,bad_lon\n",
+        encoding="utf-8",
+    )
+
+    targets = load_catalog_csv(csv_file)
+    assert len(targets) == 3
+
+    assert targets[0].target == "tgt-001"
+    assert targets[0].latitude == -6.2088
+    assert targets[0].longitude == 106.8456
+
+    assert targets[1].target == "tgt-002"
+    assert targets[1].latitude is None
+    assert targets[1].longitude is None
+
+    assert targets[2].target == "tgt-003"
+    assert targets[2].latitude is None
+    assert targets[2].longitude is None
+
+
+def test_save_catalog_csv_creates_backup_and_writes_file(tmp_path: Path) -> None:
+    catalog_path = tmp_path / "config" / "netcare_targets.csv"
+    backup_dir = tmp_path / "config" / "backups"
+
+    targets_v1 = [
+        NetcareTarget(
+            target="t1",
+            type=NetcareTargetType.SID,
+            name="Target One",
+            address="Addr 1",
+            region="CGK",
+            ocr_enabled=True,
+            service_type="Astinet",
+            latitude=-6.2,
+            longitude=106.8,
+        )
+    ]
+
+    # First write: file does not exist yet -> no backup created, returns None
+    backup1 = save_catalog_csv(targets_v1, catalog_path)
+    assert backup1 is None
+    assert catalog_path.is_file()
+
+    # Re-read to verify headers and data
+    loaded_v1 = load_catalog_csv(catalog_path)
+    assert len(loaded_v1) == 1
+    assert loaded_v1[0].target == "t1"
+    assert loaded_v1[0].latitude == -6.2
+    assert loaded_v1[0].longitude == 106.8
+
+    # Second write: file exists -> creates backup in config/backups/
+    targets_v2 = [
+        targets_v1[0],
+        NetcareTarget(
+            target="t2",
+            type=NetcareTargetType.GRAPH_TITLE,
+            name="Target Two",
+            address="Addr 2",
+            region="SUB",
+            ocr_enabled=False,
+            service_type="Metro-E",
+        ),
+    ]
+
+    backup2 = save_catalog_csv(targets_v2, catalog_path)
+    assert backup2 is not None
+    assert backup2.is_file()
+    assert backup2.parent == backup_dir
+    assert backup2.name.startswith("netcare_targets_")
+    assert backup2.name.endswith(".csv.bak")
+
+    # Verify backup contains original content (1 target)
+    backup_loaded = load_catalog_csv(backup2)
+    assert len(backup_loaded) == 1
+    assert backup_loaded[0].target == "t1"
+
+    # Verify updated target file contains both targets
+    loaded_v2 = load_catalog_csv(catalog_path)
+    assert len(loaded_v2) == 2
+    assert loaded_v2[1].target == "t2"
+    assert loaded_v2[1].ocr_enabled is False
+
+
+def test_netcare_service_mutation_methods(tmp_path: Path) -> None:
+    from mrtg_cmp.netcare.scraper import NetcareCache
+    from mrtg_cmp.netcare.service import NetcareService
+
+    cache_dir = tmp_path / "cache"
+    cache = NetcareCache(cache_dir)
+    catalog_path = tmp_path / "config" / "netcare_targets.csv"
+
+    t1 = NetcareTarget(
+        target="orig-1",
+        type=NetcareTargetType.SID,
+        name="Branch 1",
+        address="Addr 1",
+        region="CGK",
+    )
+    service = NetcareService(cache=cache, targets=[t1], catalog_path=catalog_path)
+
+    # 1. Upsert: Add brand new target
+    t2 = NetcareTarget(
+        target="new-2",
+        type=NetcareTargetType.GRAPH_TITLE,
+        name="Branch 2",
+        address="Addr 2",
+        region="SUB",
+        latitude=-7.25,
+        longitude=112.75,
+    )
+    service.upsert_target(t2)
+    assert len(service.targets) == 2
+    assert "new-2" in service._known
+
+    # 2. Upsert: Update existing target in-place
+    t2_updated = NetcareTarget(
+        target="new-2",
+        type=NetcareTargetType.GRAPH_TITLE,
+        name="Branch 2 Renamed",
+        address="Addr 2 Updated",
+        region="SUB",
+        latitude=-7.25,
+        longitude=112.75,
+    )
+    service.upsert_target(t2_updated, original_id="new-2")
+    assert len(service.targets) == 2
+    assert service.targets[1].name == "Branch 2 Renamed"
+
+    # 3. Upsert: Rename target ID and migrate cached image
+    img_path = cache.image_path("orig-1")
+    img_path.parent.mkdir(parents=True, exist_ok=True)
+    img_path.write_bytes(b"dummy-png-bytes")
+
+    t1_renamed = NetcareTarget(
+        target="renamed-1",
+        type=NetcareTargetType.SID,
+        name="Branch 1",
+        address="Addr 1",
+        region="CGK",
+    )
+    service.upsert_target(t1_renamed, original_id="orig-1")
+    assert len(service.targets) == 2
+    assert "renamed-1" in service._known
+    assert "orig-1" not in service._known
+    new_img_path = cache.image_path("renamed-1")
+    assert new_img_path.is_file()
+    assert new_img_path.read_bytes() == b"dummy-png-bytes"
+
+    # 4. Remove target
+    assert service.remove_target("new-2") is True
+    assert len(service.targets) == 1
+    assert "new-2" not in service._known
+    assert service.remove_target("non-existent") is False
