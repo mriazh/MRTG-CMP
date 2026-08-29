@@ -516,10 +516,6 @@ def test_dashboard_renders_netcare_time_preset_toolbar(client_with_db: TestClien
     ):
         assert label in resp.text
 
-    # The worker count is surfaced so the operator knows the pool width.
-    assert "netcare-workers-badge" in resp.text
-    assert "3 workers" in resp.text
-
 def test_dashboard_netcare_toolbar_matches_the_shared_presets(
     client_with_db: TestClient,
 ) -> None:

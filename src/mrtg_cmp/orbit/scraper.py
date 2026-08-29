@@ -149,6 +149,13 @@ def parse_quota_string(text: str) -> tuple[float, float]:
     if not text:
         return 0.0, 0.0
 
+    # Sanitize: strip SSID values (e.g. tselhome-6682, M23_Pro-6808) and phone
+    # numbers from the input so they never get matched as quota numerics.
+    sanitized = re.sub(r"tselhome-\S+", " ", text)
+    sanitized = re.sub(r"M23_Pro-\S+", " ", sanitized)
+    sanitized = re.sub(r"\b\d{9,13}\b", " ", sanitized)
+    text = sanitized
+
     def _convert_units(
         rem_str: str, rem_u: str | None, tot_str: str, tot_u: str | None
     ) -> tuple[float, float]:
@@ -196,6 +203,8 @@ def parse_quota_string(text: str) -> tuple[float, float]:
                 val /= 1024.0
             elif unit == "KB":
                 val /= (1024.0 * 1024.0)
+            if val > 1000.0:
+                return 0.0, 0.0
             return round(val, 2), round(val, 2)
         return 0.0, 0.0
 
@@ -364,6 +373,10 @@ def parse_package_cards_html(html: str, now: datetime | None = None) -> list[Orb
                 if known.lower() in block.lower():
                     name = known
                     break
+
+        # Guard: normalize label-like names (SSID/phone headers) to a safe default
+        if name.lower() in ("nama wifi", "wifi name", "ssid", "nomor hp", "imei", ""):
+            name = "Internet Orbit"
 
         # Find quota
         rem_gb, tot_gb = parse_quota_string(block)
