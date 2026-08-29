@@ -924,26 +924,28 @@
                     {% if not m.target.imei_valid or not m.packages %}disabled{% endif %}>
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-right: 0.35rem; vertical-align: -1px;"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>View Package Details ({{ m.packages | length }})
                 </button>
-                <button class="btn-orbit-edit" type="button"
-                    data-no="{{ m.target.no }}"
-                    data-imei="{{ m.target.imei }}"
-                    data-phone="{{ m.target.phone }}"
-                    data-location="{{ m.target.location }}"
-                    data-ssid="{{ m.target.ssid }}"
-                    data-status="{{ m.target.status }}"
-                    data-latitude="{{ m.target.latitude if m.target.latitude is not none else '' }}"
-                    data-longitude="{{ m.target.longitude if m.target.longitude is not none else '' }}"
-                    title="Edit modem {{ m.target.no }}">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-right: 0.35rem; vertical-align: -1px;"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
-                    Edit
-                </button>
-                <button class="btn-orbit-delete btn-orbit-danger" type="button"
-                    data-no="{{ m.target.no }}"
-                    data-location="{{ m.target.location }}"
-                    title="Delete modem {{ m.target.no }}">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-right: 0.35rem; vertical-align: -1px;"><path d="M3 6h18"></path><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
-                    Delete
-                </button>
+                <div class="card-action-group" style="display: flex; align-items: center; gap: 0.4rem;">
+                    <button class="btn-orbit-edit" type="button"
+                        data-no="{{ m.target.no }}"
+                        data-imei="{{ m.target.imei }}"
+                        data-phone="{{ m.target.phone }}"
+                        data-location="{{ m.target.location }}"
+                        data-ssid="{{ m.target.ssid }}"
+                        data-status="{{ m.target.status }}"
+                        data-latitude="{{ m.target.latitude if m.target.latitude is not none else '' }}"
+                        data-longitude="{{ m.target.longitude if m.target.longitude is not none else '' }}"
+                        title="Edit modem {{ m.target.no }}">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-right: 0.35rem; vertical-align: -1px;"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
+                        Edit
+                    </button>
+                    <button class="btn-orbit-delete btn-orbit-danger" type="button"
+                        data-no="{{ m.target.no }}"
+                        data-location="{{ m.target.location }}"
+                        title="Delete modem {{ m.target.no }}">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-right: 0.35rem; vertical-align: -1px;"><path d="M3 6h18"></path><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                        Delete
+                    </button>
+                </div>
             </div>
         </div>
         {% endfor %}
