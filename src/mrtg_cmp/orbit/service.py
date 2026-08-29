@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import logging
+import os
+import shutil
 import signal
+import tempfile
 import threading
 from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from mrtg_cmp.orbit.cache import OrbitCache
@@ -27,7 +31,18 @@ def build_orbit_driver(headless: bool = True) -> Any:
         logger.error("selenium is not installed; unable to build Orbit Chrome driver")
         return None
 
+    cache_path = os.environ.setdefault(
+        "SE_CACHE_PATH", str(Path(tempfile.gettempdir()) / "selenium")
+    )
+    try:
+        Path(cache_path).mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.error("Selenium cache path is not writable: %s", exc)
+        return None
+
     options = ChromeOptions()
+    profile_dir = tempfile.mkdtemp(prefix="mrtg-cmp-orbit-chrome-")
+    options.add_argument(f"--user-data-dir={profile_dir}")
     if headless:
         options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
@@ -37,8 +52,11 @@ def build_orbit_driver(headless: bool = True) -> Any:
     options.add_experimental_option("excludeSwitches", ["enable-logging"])
 
     try:
-        return webdriver.Chrome(options=options)
+        driver: Any = webdriver.Chrome(options=options)
+        driver._orbit_profile_dir = profile_dir
+        return driver
     except Exception as exc:
+        shutil.rmtree(profile_dir, ignore_errors=True)
         logger.error("Failed to start Chrome driver for Orbit scraper: %s", exc)
         return None
 
@@ -100,10 +118,14 @@ class OrbitService:
             return statuses
         finally:
             if own_driver is not None:
+                profile_dir = getattr(own_driver, "_orbit_profile_dir", None)
                 try:
                     own_driver.quit()
                 except Exception as exc:  # pragma: no cover - defensive cleanup
                     logger.debug("Failed quitting Orbit driver: %s", exc)
+                finally:
+                    if profile_dir:
+                        shutil.rmtree(profile_dir, ignore_errors=True)
             with self._lock:
                 if not already_syncing:
                     self._is_syncing = False

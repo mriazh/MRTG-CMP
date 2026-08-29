@@ -199,6 +199,22 @@ def test_netcare_unit_supports_browser_automation() -> None:
     assert "PrivateTmp=" in text
 
 
+def test_orbit_unit_uses_writable_runtime_paths() -> None:
+    text = _unit("mrtg-cmp-orbit.service").read_text(encoding="utf-8")
+    runtime_dir = "/run/mrtg-cmp-orbit"
+    assert "ProtectHome=read-only" in text
+    assert "RuntimeDirectory=mrtg-cmp-orbit" in text
+    assert "RuntimeDirectoryMode=0700" in text
+    assert f"Environment=HOME={runtime_dir}" in text
+    assert f"Environment=TMPDIR={runtime_dir}" in text
+    assert f"Environment=SE_CACHE_PATH={runtime_dir}/selenium" in text
+    assert f"Environment=MPLCONFIGDIR={runtime_dir}/matplotlib" in text
+    writable_paths = next(
+        line for line in text.splitlines() if line.startswith("ReadWritePaths=")
+    )
+    assert runtime_dir in writable_paths
+
+
 def test_orbit_unit_runs_the_orbit_command() -> None:
     """The Orbit unit runs the background modem scraper daemon."""
     assert _unit("mrtg-cmp-orbit.service").is_file()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
@@ -907,7 +908,7 @@ def test_update_catalog_modem_ssid_empty_and_missing() -> None:
 
 
 def test_build_orbit_driver() -> None:
-    """build_orbit_driver configures headless Chrome options."""
+    """build_orbit_driver configures headless Chrome and an isolated profile."""
     with patch("selenium.webdriver.Chrome") as mock_chrome:
         mock_driver = MagicMock()
         mock_chrome.return_value = mock_driver
@@ -918,6 +919,24 @@ def test_build_orbit_driver() -> None:
         assert "--headless=new" in options.arguments
         assert "--no-sandbox" in options.arguments
         assert "--disable-dev-shm-usage" in options.arguments
+        profile_argument = next(
+            arg for arg in options.arguments if arg.startswith("--user-data-dir=")
+        )
+        profile_dir = Path(profile_argument.split("=", 1)[1])
+        assert profile_dir.is_dir()
+        assert profile_dir != Path.cwd()
+        assert mock_driver._orbit_profile_dir == str(profile_dir)
+        shutil.rmtree(profile_dir)
+
+
+def test_orbit_service_sync_all_cleans_owned_chrome_profile() -> None:
+    mock_driver = MagicMock()
+    with patch("mrtg_cmp.orbit.service.build_orbit_driver", return_value=mock_driver):
+        service = OrbitService()
+        with patch.object(service.scraper, "scrape_modem", return_value=MagicMock()):
+            catalog = [OrbitModem(2, "860000000000002", "081200000002", "Room 2", "SSID-2")]
+            service.sync_all(catalog)
+    mock_driver.quit.assert_called_once()
 
 
 def test_orbit_service_sync_all(tmp_path: Path) -> None:

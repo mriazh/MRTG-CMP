@@ -10,7 +10,13 @@ Group=@APP_USER@
 WorkingDirectory=@APP_DIR@
 EnvironmentFile=-@APP_DIR@/config/.env
 EnvironmentFile=-@APP_DIR@/.env
-Environment=MPLCONFIGDIR=/tmp/matplotlib
+RuntimeDirectory=mrtg-cmp-orbit
+RuntimeDirectoryMode=0700
+Environment=HOME=/run/mrtg-cmp-orbit
+Environment=TMPDIR=/run/mrtg-cmp-orbit
+Environment=SE_CACHE_PATH=/run/mrtg-cmp-orbit/selenium
+Environment=MPLCONFIGDIR=/run/mrtg-cmp-orbit/matplotlib
+ExecStartPre=/usr/bin/mkdir -p /run/mrtg-cmp-orbit/selenium /run/mrtg-cmp-orbit/matplotlib
 ExecStart=@APP_DIR@/.venv/bin/python -m mrtg_cmp orbit
 Restart=always
 RestartSec=30s
@@ -18,7 +24,7 @@ RestartSec=30s
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=@APP_DIR@/data @APP_DIR@/config @APP_DIR@
+ReadWritePaths=@APP_DIR@/data @APP_DIR@/config @APP_DIR@ /run/mrtg-cmp-orbit
 
 [Install]
 WantedBy=multi-user.target
