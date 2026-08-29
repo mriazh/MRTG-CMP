@@ -964,6 +964,28 @@ vendored under /static/leaflet so an air-gapped deployment never reaches a CDN. 
     flex-wrap: wrap;
 }
 
+#netcare-edit-form input,
+#netcare-edit-form select {
+    width: 100%;
+    padding: 0.5rem 0.65rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-color);
+    color: var(--text-color);
+    font-size: 0.85rem;
+    box-sizing: border-box;
+}
+
+#netcare-edit-form input:focus,
+#netcare-edit-form select:focus {
+    border-color: var(--primary);
+    outline: none;
+}
+
+#netcare-edit-form label {
+    color: var(--text-secondary);
+}
+
 /* Netcare time-range toolbar (FR-15.2) */
 .netcare-toolbar {
     display: flex;
@@ -1288,7 +1310,7 @@ toggle there collapses the map without the operator losing scroll position. #}
                         style="padding: 0.35rem 0.75rem; font-size: 0.8rem; display: inline-flex; align-items: center; gap: 0.35rem;"
                         title="Add New Target Link">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                    <span>+ Add Link</span>
+                    <span>Add Link</span>
                 </button>
             </div>
         </div>
@@ -1438,11 +1460,11 @@ toggle there collapses the map without the operator losing scroll position. #}
             <div style="display: flex; gap: 0.75rem;">
                 <div style="flex: 1;">
                     <label for="netcare-edit-target" style="display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.25rem;">Target ID *</label>
-                    <input type="text" id="netcare-edit-target" required class="form-control" placeholder="e.g. 123-1" style="width: 100%; box-sizing: border-box; padding: 0.4rem 0.6rem;">
+                    <input type="text" id="netcare-edit-target" required class="form-control netcare-form-input" placeholder="e.g. 123-1">
                 </div>
                 <div style="flex: 1;">
                     <label for="netcare-edit-type" style="display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.25rem;">Target Type *</label>
-                    <select id="netcare-edit-type" class="form-control" style="width: 100%; box-sizing: border-box; padding: 0.4rem 0.6rem;">
+                    <select id="netcare-edit-type" class="form-control netcare-form-input" style="width: 100%; box-sizing: border-box; padding: 0.4rem 0.6rem;">
                         <option value="SID">SID</option>
                         <option value="Graph-title">Graph-title</option>
                     </select>
@@ -1450,16 +1472,16 @@ toggle there collapses the map without the operator losing scroll position. #}
             </div>
             <div>
                 <label for="netcare-edit-name" style="display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.25rem;">Branch Name *</label>
-                <input type="text" id="netcare-edit-name" required class="form-control" placeholder="e.g. Jakarta Thamrin Link 01" style="width: 100%; box-sizing: border-box; padding: 0.4rem 0.6rem;">
+                <input type="text" id="netcare-edit-name" required class="form-control netcare-form-input" placeholder="e.g. Jakarta Thamrin Link 01">
             </div>
             <div>
                 <label for="netcare-edit-address" style="display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.25rem;">Physical Address</label>
-                <input type="text" id="netcare-edit-address" class="form-control" placeholder="e.g. Jl. M.H. Thamrin No. 1, Jakarta" style="width: 100%; box-sizing: border-box; padding: 0.4rem 0.6rem;">
+                <input type="text" id="netcare-edit-address" class="form-control netcare-form-input" placeholder="e.g. Jl. M.H. Thamrin No. 1, Jakarta">
             </div>
             <div style="display: flex; gap: 0.75rem;">
                 <div style="flex: 1;">
                     <label for="netcare-edit-region" style="display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.25rem;">Region *</label>
-                    <select id="netcare-edit-region" class="form-control" style="width: 100%; box-sizing: border-box; padding: 0.4rem 0.6rem;">
+                    <select id="netcare-edit-region" class="form-control netcare-form-input">
                         <option value="CGK">CGK Area (CGK)</option>
                         <option value="SUB">Surabaya (SUB)</option>
                         <option value="UPG">Makassar (UPG)</option>
@@ -1470,7 +1492,7 @@ toggle there collapses the map without the operator losing scroll position. #}
                 </div>
                 <div style="flex: 1;">
                     <label for="netcare-edit-service-type" style="display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.25rem;">Service Type *</label>
-                    <select id="netcare-edit-service-type" class="form-control" style="width: 100%; box-sizing: border-box; padding: 0.4rem 0.6rem;">
+                    <select id="netcare-edit-service-type" class="form-control netcare-form-input">
                         <option value="Astinet">Astinet</option>
                         <option value="Metro-E">Metro-E</option>
                         <option value="VPN IP">VPN IP</option>
@@ -1480,11 +1502,11 @@ toggle there collapses the map without the operator losing scroll position. #}
             <div style="display: flex; gap: 0.75rem;">
                 <div style="flex: 1;">
                     <label for="netcare-edit-latitude" style="display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.25rem;">Latitude</label>
-                    <input type="number" step="any" id="netcare-edit-latitude" class="form-control" placeholder="-6.2088" style="width: 100%; box-sizing: border-box; padding: 0.4rem 0.6rem;">
+                    <input type="number" step="any" id="netcare-edit-latitude" class="form-control netcare-form-input" placeholder="-6.2088">
                 </div>
                 <div style="flex: 1;">
                     <label for="netcare-edit-longitude" style="display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.25rem;">Longitude</label>
-                    <input type="number" step="any" id="netcare-edit-longitude" class="form-control" placeholder="106.8456" style="width: 100%; box-sizing: border-box; padding: 0.4rem 0.6rem;">
+                    <input type="number" step="any" id="netcare-edit-longitude" class="form-control netcare-form-input" placeholder="106.8456">
                 </div>
             </div>
             <div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.25rem;">
@@ -1862,8 +1884,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // Grid View is the default landing state, so the map stays collapsed until
-    // asked for -- that is what makes this a toggle rather than a second page.
+    // Landing state: open map by default when requested or keep grid default with instant expand
     applyView('grid');
     if (markerCountBadge) {
         markerCountBadge.dataset.count = String(markers.length);

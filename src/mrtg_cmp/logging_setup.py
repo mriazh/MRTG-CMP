@@ -39,7 +39,13 @@ FILE_ENCODING = "utf-8"
 #: ChromeDriver drives a single-connection pool against localhost, so urllib3
 #: warns "Connection pool is full, discarding connection" for every scraper
 #: command while nothing is actually wrong (FR-16.3).
-NOISY_LOGGERS = ("urllib3.connectionpool",)
+#: matplotlib.font_manager also spams warnings when Windows fonts (e.g. Courier New)
+#: are missing on minimal Debian Linux installations.
+NOISY_LOGGERS = (
+    "urllib3.connectionpool",
+    "matplotlib.font_manager",
+    "matplotlib",
+)
 
 #: Marks the handlers this module owns, so reconfiguration never touches
 #: handlers installed by uvicorn, pytest, or an embedding application.

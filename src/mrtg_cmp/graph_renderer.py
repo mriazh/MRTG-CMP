@@ -33,7 +33,7 @@ WIB_TZ = timezone(WIB_OFFSET, name="WIB")
 GRID_MAJOR_COLOR = "#FFAAAA"
 ARROW_COLOR = "#CC0000"
 FIGURE_FACECOLOR = "#E5E5E5"
-FONT_FAMILY = ["Courier New", "DejaVu Sans Mono", "monospace"]
+FONT_FAMILY = ["DejaVu Sans Mono", "Liberation Mono", "Courier New", "monospace"]
 BEZEL_HIGHLIGHT_COLOR = "#FFFFFF"
 BEZEL_SHADE_COLOR = "#808080"
 SUBTITLE_Y = 0.165
