@@ -125,7 +125,7 @@ class OrbitService:
                 statuses.append(st)
 
             if cache is not None:
-                cache.save(statuses)
+                self._save_cache_merging_errors(cache, statuses)
 
             return statuses
         finally:
@@ -141,6 +141,73 @@ class OrbitService:
             with self._lock:
                 if not already_syncing:
                     self._is_syncing = False
+
+    def _save_cache_merging_errors(
+        self, cache: OrbitCache, statuses: list[OrbitModemStatus]
+    ) -> None:
+        """Persist scraped statuses, retaining cached quota for failed/empty modems.
+
+        A scrape round that returns DRIVER_UNAVAILABLE, or yields 0.0 GB for
+        every modem while the cache already holds valid quota data, must not
+        overwrite the good cached values. For each modem we keep the freshly
+        scraped status unless it is a hard driver error, or it returned 0.0 GB
+        while a previously cached status for that modem had a real quota.
+        """
+        previous = cache.load()
+        prev_by_no: dict[int, OrbitModemStatus] = {}
+        if previous:
+            for st in previous:
+                prev_by_no[st.target.no] = st
+
+        has_driver_unavailable = any(
+            s.error == "DRIVER_UNAVAILABLE" for s in statuses
+        )
+        all_zero = all(
+            s.total_remaining_gb == 0.0 and s.total_quota_gb == 0.0 for s in statuses
+        )
+        cache_has_valid_quota = any(
+            s.total_quota_gb > 0.0 or s.total_remaining_gb > 0.0
+            for s in (previous or [])
+        )
+
+        to_save: list[OrbitModemStatus] = []
+        retained = 0
+        for st in statuses:
+            prior = prev_by_no.get(st.target.no)
+            failed_driver = st.error == "DRIVER_UNAVAILABLE"
+            empty_over_valid = (
+                not st.error
+                and st.total_remaining_gb == 0.0
+                and st.total_quota_gb == 0.0
+                and prior is not None
+                and (prior.total_quota_gb > 0.0 or prior.total_remaining_gb > 0.0)
+            )
+            keep_existing = (
+                st.error == "IMEI_PENDING"
+                or failed_driver
+                or empty_over_valid
+            )
+            if keep_existing and prior is not None:
+                # Refresh the target reference but keep cached quota data.
+                prior.target = st.target
+                to_save.append(prior)
+                retained += 1
+            else:
+                to_save.append(st)
+
+        if retained:
+            reasons = []
+            if has_driver_unavailable:
+                reasons.append("DRIVER_UNAVAILABLE")
+            if all_zero and cache_has_valid_quota:
+                reasons.append("all-zero overwrite guard")
+            logger.warning(
+                "Retained existing cache for %d modems due to %s",
+                retained,
+                " or ".join(reasons) if reasons else "failure",
+            )
+
+        cache.save(to_save)
 
     def sync_in_background(
         self,
