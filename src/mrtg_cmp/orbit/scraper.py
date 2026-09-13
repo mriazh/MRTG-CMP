@@ -19,6 +19,30 @@ logger = logging.getLogger("mrtg_cmp.orbit.scraper")
 
 DEFAULT_ORBIT_PORTAL_URL = "https://www.myorbit.id/informasi-modem-input"
 
+# Body markers that indicate the account has no active data package.
+NO_PACKAGE_MARKERS: tuple[str, ...] = (
+    "belum memiliki kuota",
+    "tidak memiliki kuota",
+    "belum ada kuota",
+    "beli kuota internet",
+)
+
+
+def has_no_active_package(text: str) -> bool:
+    """Return True when page text shows the account has no active package.
+
+    A marker phrase (see NO_PACKAGE_MARKERS) present without an active
+    'Sisa' quota line means the modem holds no data plan. Callers must
+    report 0.0/0.0 with no packages instead of parsing stray numbers.
+    """
+    if not text:
+        return False
+    lowered = text.lower()
+    if "sisa" in lowered:
+        return False
+    return any(marker in lowered for marker in NO_PACKAGE_MARKERS)
+
+
 # Month abbreviations mapping (both Indonesian and English)
 MONTH_MAP: dict[str, int] = {
     "jan": 1,
@@ -147,6 +171,11 @@ def parse_quota_string(text: str) -> tuple[float, float]:
     Returns (remaining_gb, total_gb).
     """
     if not text:
+        return 0.0, 0.0
+
+    # No active package markers mean zeros; never parse stray numbers
+    # or SSID suffixes off an empty account.
+    if has_no_active_package(text):
         return 0.0, 0.0
 
     # Sanitize: strip SSID values (e.g. tselhome-6682, M23_Pro-6808) and phone
@@ -586,16 +615,37 @@ class OrbitScraper:
 
             # Step 4: Wait for URL and AJAX quota data to render
             wait.until(lambda d: "prabayar" in d.current_url)
-            wait.until(
-                lambda d: "GB" in getattr(d.find_element(By.TAG_NAME, "body"), "text", "")
-                or "MB" in getattr(d.find_element(By.TAG_NAME, "body"), "text", "")
-            )
+
+            def _quota_rendered(d: Any) -> bool:
+                body = getattr(d.find_element(By.TAG_NAME, "body"), "text", "")
+                if "GB" in body or "MB" in body:
+                    return True
+                # No-package pages show marker phrases instead of units
+                return has_no_active_package(f"{body}\n{d.page_source or ''}")
+
+            wait.until(_quota_rendered)
 
             body_text = driver.find_element(By.TAG_NAME, "body").text
             page_source = driver.page_source or ""
             combined_modem = f"{body_text}\n{page_source}" if body_text else page_source
 
             extract_modem_info(body_text + "\n" + (driver.page_source or ""), target=target)
+
+            # No active data plan: report zeros with an explicit marker instead
+            # of parsing stray numbers or SSID suffixes off an empty account.
+            if has_no_active_package(combined_modem):
+                logger.info("Modem %s has no active data package", target.no)
+                return OrbitModemStatus(
+                    target=target,
+                    total_remaining_gb=0.0,
+                    total_quota_gb=0.0,
+                    multimedia_active=False,
+                    packages=[],
+                    earliest_expiry_str="No active package",
+                    earliest_days_left=0,
+                    last_scraped_at=now_str,
+                    error=None,
+                )
             total_rem, total_quota = parse_quota_string(body_text)
             if total_quota == 0.0 and page_source:
                 total_rem, total_quota = parse_quota_string(page_source)

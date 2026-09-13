@@ -236,6 +236,21 @@ def test_parse_quota_string() -> None:
     assert parse_quota_string("No Quota Available") == (0.0, 0.0)
 
 
+def test_parse_quota_string_no_active_package_markers() -> None:
+    """No-package marker phrases (without 'Sisa') return zeros, never stray numbers."""
+    # Marker + stray numbers that must NOT be parsed
+    text_no_quota = "Modem 0812345 belum memiliki kuota. Beli kuota internet sekarang."
+    assert parse_quota_string(text_no_quota) == (0.0, 0.0)
+
+    assert parse_quota_string("Modem tidak memiliki kuota aktif 5GB") == (0.0, 0.0)
+    assert parse_quota_string("Belum ada kuota. Sesi 12.5 GB / 20 GB") == (0.0, 0.0)
+
+    # Marker alongside an active 'Sisa' quota still parses the Sisa line
+    rem, tot = parse_quota_string("Sisa 10GB / 20GB - belum memiliki kuota multimedia")
+    assert rem == 10.0
+    assert tot == 20.0
+
+
 def test_parse_expiry_date() -> None:
     """Parses Indonesian and English month strings and computes days left."""
     ref_now = datetime(2026, 10, 1, tzinfo=UTC)
@@ -554,6 +569,51 @@ def test_orbit_scraper_with_live_probe_rendered_text() -> None:
     assert status.packages[2].name == "Internet Orbit"
     assert status.earliest_expiry_str == "13 Oct 2026"
     assert status.earliest_days_left == 12
+
+
+def test_orbit_scraper_no_active_package_returns_clean_status() -> None:
+    """A modem with no active data plan reports zeros and 'No active package'."""
+    ref_now = datetime(2026, 10, 1, tzinfo=UTC)
+    scraper = OrbitScraper()
+    modem = OrbitModem(3, "860000000000003", "081200000003", "Room C", "Orbit-C")
+
+    mock_driver = MagicMock()
+    phone_input = MagicMock()
+    imei_input = MagicMock()
+    lanjut_btn = MagicMock()
+    lanjut_btn.text = "Lanjutkan"
+    cek_btn = MagicMock()
+    cek_btn.text = "Cek Kuota"
+
+    body = MagicMock()
+    body.text = "Anda belum memiliki kuota internet aktif. Beli kuota internet."
+
+    def mock_find_element(by: str, value: str) -> Any:
+        if by == "tag name" and value == "body":
+            return body
+        return MagicMock()
+
+    def mock_find_elements(by: str, value: str) -> list[Any]:
+        if by == "tag name" and value == "input":
+            return [phone_input, imei_input]
+        if by == "tag name" and value == "button":
+            return [lanjut_btn]
+        if "Cek Kuota" in value:
+            return [cek_btn]
+        return []
+
+    mock_driver.find_element.side_effect = mock_find_element
+    mock_driver.find_elements.side_effect = mock_find_elements
+    mock_driver.page_source = "<div>belum memiliki kuota</div>"
+    mock_driver.current_url = "https://www.myorbit.id/prabayar-info-modem"
+
+    status = scraper.scrape_modem(modem, driver=mock_driver, now=ref_now)
+    assert status.error is None
+    assert status.total_remaining_gb == 0.0
+    assert status.total_quota_gb == 0.0
+    assert status.packages == []
+    assert status.earliest_expiry_str == "No active package"
+    assert status.earliest_days_left == 0
 
 
 def test_orbit_scraper_less_than_two_inputs_returns_error() -> None:
