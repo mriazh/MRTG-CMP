@@ -1005,14 +1005,14 @@ def test_api_netcare_query_routes_historical_presets_to_a_day_partition(
 ) -> None:
     """A past window gets its own date partition; a current one stays live."""
 
-    from mrtg_cmp.web import app as app_module
+    from mrtg_cmp.web import dependencies as deps_module
 
     # Pin WIB to 14:00. The partition decision compares the window start date to
     # now, so an unpinned clock flips the "1h"/"3h" rows into a partition during
     # the 00:00-01:00 WIB window and the suite flakes once a day. 14:00 also
     # keeps the "month" row on a month-start that is genuinely in the past.
     frozen = datetime(2026, 9, 15, 14, 0, 0)
-    monkeypatch.setattr(app_module, "_now_wib", lambda: frozen)
+    monkeypatch.setattr(deps_module, "_now_wib", lambda: frozen)
 
     login_resp = netcare_query_client.post(
         "/login", data={"username": "admin", "password": "admin123"}

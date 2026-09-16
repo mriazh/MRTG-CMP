@@ -1,4 +1,4 @@
-"""Unit and integration tests for Telkomsel Orbit monitoring engine."""
+﻿"""Unit and integration tests for Telkomsel Orbit monitoring engine."""
 
 from __future__ import annotations
 
@@ -833,7 +833,7 @@ def test_api_orbit_sync_endpoint(client_with_db: TestClient) -> None:
     login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
     assert login_resp.status_code in (200, 302, 303)
 
-    with patch("mrtg_cmp.web.app._orbit_service") as mock_srv_getter:
+    with patch("mrtg_cmp.web.routes.orbit._orbit_service") as mock_srv_getter:
         mock_srv = MagicMock()
         mock_srv_getter.return_value = mock_srv
         resp = client_with_db.post("/api/orbit/sync", cookies=login_resp.cookies)
@@ -1526,7 +1526,7 @@ def test_api_orbit_modem_create_persists_and_audits(
     monkeypatch.setattr(settings, "orbit_catalog_file", str(catalog_file))
     cookies = _login(client_with_db)
 
-    with patch("mrtg_cmp.web.app.audit_log") as mock_audit:
+    with patch("mrtg_cmp.web.routes.orbit.audit_log") as mock_audit:
         resp = client_with_db.post(
             "/api/orbit/modem",
             cookies=cookies,
@@ -1602,7 +1602,7 @@ def test_api_orbit_modem_update_and_renumber(
     monkeypatch.setattr(settings, "orbit_catalog_file", str(catalog_file))
     cookies = _login(client_with_db)
 
-    with patch("mrtg_cmp.web.app.audit_log") as mock_audit:
+    with patch("mrtg_cmp.web.routes.orbit.audit_log") as mock_audit:
         resp = client_with_db.put(
             "/api/orbit/modem/3",
             cookies=cookies,
@@ -1662,7 +1662,7 @@ def test_api_orbit_modem_delete_removes_from_catalog(
     monkeypatch.setattr(settings, "orbit_catalog_file", str(catalog_file))
     cookies = _login(client_with_db)
 
-    with patch("mrtg_cmp.web.app.audit_log") as mock_audit:
+    with patch("mrtg_cmp.web.routes.orbit.audit_log") as mock_audit:
         resp = client_with_db.delete("/api/orbit/modem/10", cookies=cookies)
 
     assert resp.status_code == 200
