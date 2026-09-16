@@ -103,18 +103,18 @@ def orbit_marker_color(status: str) -> str:
     return MARKER_COLOR_OK if (status or "").strip().upper() == "ACTIVE" else MARKER_COLOR_DEGRADED
 
 
-#: Default coordinates per regional airport / GMF base for targets that have not
+#: Default coordinates per regional airport for targets that have not
 #: yet had explicit GPS coordinates saved in the catalog.
 REGION_FALLBACK_COORDINATES: dict[str, tuple[float, float]] = {
-    "CGK": (-6.1256, 106.6559),      # Soekarno-Hatta / GMF AeroAsia Cengkareng
-    "SUB": (-7.3798, 112.7876),      # Juanda Surabaya
-    "UPG": (-5.0617, 119.5540),      # Sultan Hasanuddin Makassar
-    "DPS": (-8.7482, 115.1672),      # Ngurah Rai Denpasar Bali
-    "BPN": (-1.2683, 116.8944),      # Sepinggan Balikpapan
-    "SENTUL": (-6.5414, 106.8778),   # Sentul Data Center / VPN
+    "CGK": (-6.1256, 106.6559),
+    "SUB": (-7.3798, 112.7876),
+    "UPG": (-5.0617, 119.5540),
+    "DPS": (-8.7482, 115.1672),
+    "BPN": (-1.2683, 116.8944),
+    "SENTUL": (-6.5414, 106.8778),
 }
 
-GMF_BASE_COORDINATES = (-6.1256, 106.6559)  # GMF AeroAsia Soetta default
+BASE_STATION_COORDINATES = (-6.1256, 106.6559)
 
 
 def netcare_marker(card: Mapping[str, Any]) -> dict[str, Any] | None:

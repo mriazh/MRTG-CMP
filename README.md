@@ -1,99 +1,84 @@
 # MRTG-CMP
 
-Enterprise-grade network traffic monitoring, historical analysis, and reporting system for MikroTik RouterOS branch gateways.
+Enterprise network monitoring platform for a MikroTik WAN uplink plus two live portal scrapers (TelkomCare MRTG branch graphs and Telkomsel Orbit modem quotas). Traffic samples land in an embedded SQLite database (WAL mode) and are served through an authenticated FastAPI dashboard with RRDtool-style graphs, PNG/Excel/CSV exports, an interactive Leaflet map, and a NOC status strip.
 
-The system polls the MikroTik RouterOS API over a dedicated TCP tunnel, records granular time-series traffic samples in an embedded SQLite database (WAL mode), and serves an authenticated web dashboard featuring custom date-range selection, RRDtool-identical graphs, and multi-format reporting exports (PNG, Excel, CSV).
-
----
+Production runs as four systemd daemons: `mrtg-cmp-web` (FastAPI modular router), `mrtg-cmp-collector` (MikroTik WAN telemetry), `mrtg-cmp-netcare` (TelkomCare 18-branch scraper), and `mrtg-cmp-orbit` (Telkomsel Orbit 12-modem quota scraper).
 
 ## Key Capabilities
 
-- **Direct RouterOS API Polling**: Queries cumulative octet counters (`rx-byte`, `tx-byte`) over TCP port `8728` (or custom tunnel port), bypassing SNMP UDP limitations.
-- **Robust Delta Rate Engine**: Computes exact bits per second with counter rollover, router reboot, and rate sanity guards.
-- **RRDtool Visual Fidelity**: Generates pixel-perfect telco-style graphs (stepped solid green inbound area `#00CC00`, stepped dark blue outbound line `#0000CC`, high-contrast pink dotted grid `#FFAAAA` at `zorder=3`, 3D chiseled outer bezel, 100% monospace typography, and directional arrows).
-- **True RRDtool Dynamic Autoscale**: Implements standard logarithmic `nice_ceiling()` math with 5% headroom and 5 clean horizontal divisions, adapting effortlessly from idle/low traffic to 150 Mbps+ without clipping or flattening.
-- **Multi-Timespan Adaptive Locators**: Dynamically adapts time ticks across all ranges: 1-minute ticks for sub-15m, 10-minute ticks for sub-2h, 2-hour ticks for 24h (MRTG Daily standard), and daily ticks for 7d (MRTG Weekly standard).
-- **Point-and-Click Time Selector & Sub-Day Presets**: 100% point-and-click date-time matrix selector, hourly presets (*1 Hour*, *3 Hours*, *6 Hours*, *12 Hours*, *24 Hours*, *Today*, *Yesterday*, *7 Days*, *This Month*), single-click 24h day picker, and instant "Now" shortcut.
-- **RouterOS Web Console Bridge**: Integrated web terminal emulator with live MikroTik passthrough authentication (zero router credentials stored on disk), contextual TAB autocomplete matching RouterOS v6, Up/Down arrow command history, anti-linger session security (auto-lock & tab-close kill), and SQLite audit trail.
-- **Reporting & Exports**: Instant downloads of rendered PNG graphs, styled Excel (`.xlsx`) workbooks with metadata banners, and raw CSV files.
-- **Clean NOC Aesthetics**: Authentic RRDtool visual styling with seamless Light and Dark Mode NOC themes (slate palette `#0F172A`, `#1E293B`, `#38BDF8`), anti-FOUC script, live collapsible recent samples table, and real-time 60-second countdown auto-refresh.
-- **Session Authentication**: Protected web dashboard with PBKDF2-HMAC-SHA256 password hashing, auto-syncing admin password from `.env`, and "Remember Me" session persistence.
-- **Zero External Database Overhead**: Powered by embedded SQLite with Write-Ahead Logging (WAL) for 100% portability across Windows 11 and Debian 13.
+- **Direct RouterOS API Polling**: reads cumulative octet counters over TCP 8728 (or a tunnel port) with a delta-rate engine that survives counter rollover and router reboots.
+- **RRDtool-Fidelity Graphs**: Matplotlib rendering with dynamic autoscaling, adaptive time ticks per range, and stepped inbound/outbound styling; PNG, Excel (`.xlsx`), and CSV exports for any time window.
+- **Point-and-Click Time Ranges**: presets (1/3/6/12/24 Hours, Today, Yesterday, 7 Days, This Month), a day picker, a custom From/To selector, and a Now shortcut.
+- **RouterOS Web Console**: browser terminal with live RouterOS passthrough auth, command history, and a SQLite audit trail; auto-lock kills the session on tab close.
+- **TelkomCare Scraper**: headless-Chrome capture of 18 branch MRTG graphs with Gemini CAPTCHA failover, TOTP auto-login, and a parallel worker pool.
+- **Telkomsel Orbit Scraper**: 12-modem quota monitoring with burn-rate forecasting, days-to-exhaustion, and predictive WhatsApp alerts.
+- **Interactive Leaflet Map**: top-of-dashboard CartoDB Dark Matter map plotting Netcare branches and Orbit modems with valid coordinates (30 target coordinates across both catalogs), with a Show/Hide toggle.
+- **NOC Summary Strip**: Fresh/Stale/Down counters for the 18 Netcare links, updated on each scrape round.
+- **Hardened Auth**: SHA-256 session-token hashing, session revocation on logout and password change, admin/viewer RBAC, and open-redirect validation.
+- **Zero External Database**: embedded SQLite (WAL) — portable across Windows 11 and Debian 13.
+
+## Architecture
+
+```
+  MikroTik RouterOS (WAN uplink)          TelkomCare Portal            MyOrbit Portal
+         │ RouterOS API (TCP 8728)          │ HTTPS + headless Chrome    │ HTTPS + headless Chrome
+         ▼                                  ▼                            ▼
+ mrtg-cmp-collector                mrtg-cmp-netcare               mrtg-cmp-orbit
+ (MikroTik telemetry, 30s)         (18-branch graph scraper,      (12-modem quota scraper,
+   10s fast-probe on DOWN)          300s)                          300s)
+         │                              │                            │
+         ▼                              ▼                            ▼
+  SQLite (data/traffic.db)     data/netcare_cache/            data/orbit_cache/
+                                   \                              /
+                                    └────────────┬───────────────┘
+                                                 ▼
+                       mrtg-cmp-web (FastAPI modular router, port 8000)
+                       dashboard, map, NOC strip, exports, console
+                                                 │
+                                                 ▼
+                     Engineer browser (via office LAN / VPN, or
+                     Cloudflare Zero Trust tunnel for remote access)
+```
+
+### Daemons & Polling Intervals
+
+| Daemon | Command | Interval | Notes |
+| :--- | :--- | :--- | :--- |
+| `mrtg-cmp-collector` | `python -m mrtg_cmp collect` | 30s | `POLLING_INTERVAL=30`; on link/route DOWN the interval drops to 10s fast-probe (`POLLING_INTERVAL_DOWN=10`) until recovery |
+| `mrtg-cmp-web` | `python -m mrtg_cmp web` | — | FastAPI/Uvicorn on port 8000; routes live in `web/routes/` modules (`auth`, `dashboard`, `netcare`, `orbit`, `console`, `logs`) |
+| `mrtg-cmp-netcare` | `python -m mrtg_cmp netcare` | 300s | `NETCARE_POLL_INTERVAL_SECONDS=300` |
+| `mrtg-cmp-orbit` | `python -m mrtg_cmp orbit` | 300s | `ORBIT_SYNC_INTERVAL_SECONDS=300` |
+
+Frontend cadence: the dashboard's live telemetry card polls every 30s; the Netcare and Orbit card grids auto-refresh from server cache every 300s with a visible countdown and manual "Refresh All" (Orbit Refresh All triggers an immediate live scrape).
+
+### Security Architecture
+
+- **Session tokens**: stored only as SHA-256 hashes in SQLite (`sessions.token_hash`); the raw token lives in the HttpOnly `SameSite=Lax` cookie.
+- **Revocation**: logout revokes the current session; password change revokes all of that user's sessions.
+- **RBAC**: `admin` role can manage users, scrape triggers, catalog CRUD, and the console; `viewer` role is read-only (no console nav, write APIs return 403).
+- **Open-redirect validation**: login `next` targets pass `validate_redirect_url()` (CWE-601) — absolute/external URLs are rejected.
+- **Passwords**: PBKDF2-HMAC-SHA256, 260,000 iterations, 16-byte random salt.
+- **Remote access**: the dashboard is reached through a Cloudflare Zero Trust tunnel (Argo) rather than a public IP; office LAN and VPN access remain available.
 
 ---
 
-## Architecture Overview
+## Configuration
 
-```
-┌──────────────────────────────────────┐
-│       Enterprise Branch Router       │
-│         (MikroTik RouterOS)          │
-│    Interface: WAN (Main Uplink 150M) │
-└──────────────────┬───────────────────┘
-                   │ RouterOS API (TCP 8728)
-                   ▼
-┌──────────────────────────────────────┐
-│       Traffic Monitor Host           │
-│   ┌──────────────────────────────┐   │
-│   │ Collector Daemon (300s)      │   │
-│   └──────────────┬───────────────┘   │
-│                  ▼                   │
-│   ┌──────────────────────────────┐   │
-│   │ SQLite Database (traffic.db) │   │
-│   └──────────────┬───────────────┘   │
-│                  ▼                   │
-│   ┌──────────────────────────────┐   │
-│   │ FastAPI Web Dashboard        │   │
-│   │ Matplotlib RRDtool Engine    │   │
-│   │ Excel & CSV Exporters        │   │
-│   └──────────────┬───────────────┘   │
-└──────────────────┼───────────────────┘
-                   │ HTTP / Web Dashboard
-                   ▼
-┌──────────────────────────────────────┐
-│       Engineer Web Browser           │
-│   - Date-Picker & Quick Presets      │
-│   - Live In/Out Telemetry Card       │
-│   - Download PNG, Excel, CSV         │
-└──────────────────────────────────────┘
-```
+All settings live in `config/.env` (documented with comments in `config/.env.example`; a root `.env` is optional and read after it). Key variables:
 
----
-
-## Configuration Reference (`.env`)
-
-Copy `.env.example` to `.env` and adjust the variables:
-
-```ini
-# Application branding and site identification
-APP_NAME="MRTG Traffic Monitor"
-SITE_NAME="Enterprise Gateway"
-LOCATION_NAME="Branch Office"
-UPLINK_NAME="Main Uplink (150 Mbps)"
-DATABASE_PATH="data/traffic.db"
-
-# MikroTik RouterOS API Settings
-ROUTEROS_HOST="192.168.88.1"
-ROUTEROS_PORT=8728
-ROUTEROS_USERNAME="mrtg"
-ROUTEROS_PASSWORD="YourRouterPassword"
-ROUTEROS_INTERFACE="WAN"
-
-# Collector Timing (seconds)
-POLLING_INTERVAL=60
-
-# Web Dashboard Server
-WEB_HOST="0.0.0.0"
-WEB_PORT=8000
-SECRET_KEY="generate-a-secure-random-key"
-SESSION_COOKIE_SECURE=false
-SESSION_TTL_SECONDS=28800
-REMEMBER_ME_TTL_SECONDS=2592000
-
-# Default Initial Administrator
-ADMIN_USERNAME="admin"
-ADMIN_PASSWORD="ChangeMeImmediately123!"
-```
+| Variable | Default | Purpose |
+| :--- | :--- | :--- |
+| `ROUTEROS_HOST` / `ROUTEROS_PORT` | `192.168.88.1` / `8728` | RouterOS API endpoint (tunnel domain for remote) |
+| `POLLING_INTERVAL` | `60` | Collector cycle, seconds (production sets `30`) |
+| `POLLING_INTERVAL_DOWN` | `10` | Fast-probe cycle while the link is DOWN |
+| `NETCARE_POLL_INTERVAL_SECONDS` | `300` | Netcare scrape round, seconds |
+| `ORBIT_SYNC_INTERVAL_SECONDS` | `300` | Orbit scrape round, seconds |
+| `WEB_PORT` | `8000` | Dashboard bind port |
+| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | `admin` / `admin123` | Initial admin seeded by `init-db` (change immediately) |
+| `TUNNEL_WEB_*` | empty | Optional tunnel.web.id watchdog auto-restart |
+| `WA_ALERT_ENABLED` / `WA_*` | `false` | Optional GOWA WhatsApp gateway alerts |
+| `GEMINI_API_KEYS` / `GEMINI_MODELS` | empty | Netcare CAPTCHA solving keys & model failover list |
+| `TOTP_SECRET` | — | Unattended Netcare portal MFA (omit to log in manually) |
 
 ---
 
@@ -112,15 +97,15 @@ cd MRTG-CMP
 # Install all project and development dependencies
 uv sync --all-extras
 
-# Copy environment settings
-cp .env.example .env
+# Copy environment settings (root .env.example -> .env; config/.env also supported)
+Copy-Item .env.example .env
 ```
 
 ### 3. Initialize Database & Admin User
 ```powershell
 uv run mrtg-cmp init-db
 ```
-*(Default user: `admin` / `admin123`)*
+Seeds the initial admin (`admin` / `admin123` by default — set `ADMIN_PASSWORD` in `.env` or rotate it immediately).
 
 To create or update a user password:
 ```powershell
@@ -159,25 +144,34 @@ source $HOME/.local/bin/env
 
 ### 2. Deploy Project Directory
 ```bash
-cd /home/mriazh
-git clone https://github.com/mriazh/MRTG-CMP.git
+cd /home/<user>
+git clone https://github.com/<org>/MRTG-CMP.git
 cd MRTG-CMP
 
 # Install production dependencies
 uv sync --no-dev
 cp .env.example .env
-nano .env  # configure actual router password and secret key
+nano .env  # router credentials, secret key, POLLING_INTERVAL=30
 
 # Initialize database
 uv run mrtg-cmp init-db
 
-# Make automated deployment script executable
+# Make the deployment script executable
 chmod +x deploy.sh
 ```
 
-### 3. Install Systemd Services (Auto-Run on Reboot)
-The standardized `mrtg-cmp-*` units ship with `@APP_DIR@` / `@APP_USER@` placeholders that
-`deploy.sh` substitutes at install time, so the same units work on any checkout path:
+### 3. Install the Four Systemd Services
+`deploy.sh` renders all four units (substituting the `@APP_DIR@` / `@APP_USER@` placeholders
+from `systemd/`) and manages them end to end, so the manual steps below are only needed for
+first-time reference:
+
+| Unit | Runs | Purpose |
+| :--- | :--- | :--- |
+| `mrtg-cmp-web.service` | `python -m mrtg_cmp web` | FastAPI modular-router dashboard on port 8000 |
+| `mrtg-cmp-collector.service` | `python -m mrtg_cmp collect` | MikroTik WAN telemetry every 30s (10s fast-probe on DOWN) |
+| `mrtg-cmp-netcare.service` | `python -m mrtg_cmp netcare` | TelkomCare 18-branch graph scraper every 300s |
+| `mrtg-cmp-orbit.service` | `python -m mrtg_cmp orbit` | Telkomsel Orbit 12-modem quota scraper every 300s |
+
 ```bash
 sudo sed -e "s|@APP_DIR@|$PWD|g" -e "s|@APP_USER@|$(id -un)|g" \
     systemd/mrtg-cmp-collector.service | sudo tee /etc/systemd/system/mrtg-cmp-collector.service
@@ -185,56 +179,36 @@ sudo sed -e "s|@APP_DIR@|$PWD|g" -e "s|@APP_USER@|$(id -un)|g" \
     systemd/mrtg-cmp-web.service | sudo tee /etc/systemd/system/mrtg-cmp-web.service
 sudo sed -e "s|@APP_DIR@|$PWD|g" -e "s|@APP_USER@|$(id -un)|g" \
     systemd/mrtg-cmp-netcare.service | sudo tee /etc/systemd/system/mrtg-cmp-netcare.service
+sudo sed -e "s|@APP_DIR@|$PWD|g" -e "s|@APP_USER@|$(id -un)|g" \
+    systemd/mrtg-cmp-orbit.service | sudo tee /etc/systemd/system/mrtg-cmp-orbit.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now mrtg-cmp-collector.service
-sudo systemctl enable --now mrtg-cmp-web.service
-sudo systemctl enable --now mrtg-cmp-netcare.service
+sudo systemctl enable --now mrtg-cmp-collector.service mrtg-cmp-web.service mrtg-cmp-netcare.service mrtg-cmp-orbit.service
 ```
 
-| Unit | Runs | Purpose |
-| :--- | :--- | :--- |
-| `mrtg-cmp-web.service` | `python -m mrtg_cmp web` | Unified dashboard + API |
-| `mrtg-cmp-collector.service` | `python -m mrtg_cmp collect` | MikroTik WAN polling every 30s |
-| `mrtg-cmp-netcare.service` | `python -m mrtg_cmp netcare` | TelkomCare branch graph scraper every 5 min |
-
-The Netcare unit needs Google Chrome (or Chromium) installed for headless graph capture:
+The Netcare and Orbit units both need Chrome (or Chromium) for headless scraping:
 ```bash
 sudo apt install -y chromium
 ```
 
-### 4. Firewall & Network Access
-Allow web access through the Debian firewall:
-```bash
-sudo ufw allow 8000/tcp comment "MRTG Web Dashboard & Console"
-```
+### 4. Network Access
+The dashboard is not exposed to the open internet. Remote access goes through the
+Cloudflare Zero Trust tunnel (Argo) registered for the server's port 8000; office LAN and
+VPN clients can also reach `http://<server-ip>:8000` directly.
 
-- **Office LAN Access**: Connect your workstation to the branch network (cable or Wi-Fi) and open:
-  `http://<server-ip>:8000`
-- **Remote / WFH Access**: Connect your workstation to your corporate VPN client. Once connected to the tunnel, navigate to:
-  `http://<server-ip>:8000`
-
-### 5. Automated 1-Click Fast Updates (`deploy.sh`)
-Whenever updates are pushed from development, update the production server with zero hassle:
+### 5. 1-Click Updates (`deploy.sh`)
 ```bash
 ./deploy.sh
 ```
-This script pulls the latest git commits, syncs Python packages, stops and disables the legacy
-`mrtg-poncab-*` units if they are installed, renders the `mrtg-cmp-*` units for the current
-checkout path, then enables and restarts all three services. Traffic data and web sessions
-are preserved.
+Pulls the latest commits, syncs Python packages, disables any legacy `mrtg-poncab-*`
+units, re-renders the four `mrtg-cmp-*` units for the current checkout path, then restarts
+all four services. Traffic data and web sessions survive the restart.
 
 ### 6. Service Health & Logs
 ```bash
-# Check service statuses
-sudo systemctl status mrtg-cmp-web.service
-sudo systemctl status mrtg-cmp-collector.service
-sudo systemctl status mrtg-cmp-netcare.service
-
-# Stream live collector logs
-sudo journalctl -u mrtg-cmp-collector.service -f
-
-# Stream Netcare scraper logs (login, CAPTCHA rotation, capture status)
-sudo journalctl -u mrtg-cmp-netcare.service -f
+sudo systemctl status mrtg-cmp-web.service mrtg-cmp-collector.service mrtg-cmp-netcare.service mrtg-cmp-orbit.service
+sudo journalctl -u mrtg-cmp-collector.service -f   # telemetry collection
+sudo journalctl -u mrtg-cmp-netcare.service -f     # CAPTCHA, login, capture status
+sudo journalctl -u mrtg-cmp-orbit.service -f       # quota scrape rounds
 ```
 
 ---
@@ -273,9 +247,10 @@ dashboard as the live MikroTik telemetry.
 - **Branch cards**: branch name, target ID, physical address, relative update badge
   (`Updated 3m ago`), and status indicator.
 - **Click to zoom**: full-resolution modal with metadata and a PNG download button.
-- **Auto-refresh**: the page reloads Netcare data every 5 minutes with a visible countdown
-  and a manual "Refresh All" button. MikroTik live polling stays at 30 seconds.
-- **Reserved nav**: `/orbit` is a placeholder for the upcoming Telkomsel Orbit modem page.
+- **Auto-refresh**: the Netcare grid reloads from server cache every 300s with a visible
+  countdown and a manual "Refresh All" button. MikroTik live polling stays at 30 seconds.
+- **NOC summary strip**: Fresh / Stale / Down counters across all 18 branches above the
+  branch grid.
 
 ### Time Range Selection
 The Netcare section has its own toolbar, mirroring the MikroTik one so both mean
@@ -306,16 +281,18 @@ uv run mrtg-cmp netcare
 ```
 
 ### Configuration
-All settings live in `.env` (documented in `.env.example`). At minimum set
-`GEMINI_API_KEYS`, `TELKOM_USER`, `TELKOM_PASSWORD`, and `TOTP_SECRET` to enable auto-login.
+All settings live in `config/.env` (documented in `config/.env.example`). Set
+`NETCARE_CATALOG_FILE` to a CSV export with the columns
+`type,target,name,address,region,ocr_enabled,service_type` to override the built-in branch
+list at runtime. `config/netcare_targets.csv.example` documents that format with 18 example
+circuits (`target-001` through `target-018`); copy it to `config/netcare_targets.csv` and
+fill in your own circuits — that file is gitignored because it names your portal circuit
+ids, branch names, and facility addresses.
 
-Deployments holding the full master list can point `NETCARE_CATALOG_FILE` at a CSV export
-with the columns `type,target,name,address,region,ocr_enabled,service_type` to replace the
-built-in branch names and addresses at runtime. The committed
-`config/netcare_targets.csv.example` documents that format with 18 anonymous circuits
-(`target-001` through `target-018`); copy it to `config/netcare_targets.csv` and fill in your
-own circuits. That file is gitignored, because it names your portal circuit ids, branch names,
-and facility addresses.
+For unattended login, set `GEMINI_API_KEYS` (CAPTCHA solving) and `TOTP_SECRET`
+(MFA code generation).
+
+### Storage Layout
 
 ### Storage Layout
 ```
@@ -336,6 +313,52 @@ flat and always re-captures, because it is the "latest" view.
 
 ---
 
+## Telkomsel Orbit Modem Quota Scraper
+
+Scrapes the live MyOrbit portal (`myorbit.id`) for the 12 modems in
+`config/orbit_targets.csv` (or a private Excel catalog), and persists per-modem
+quota, expiry, and status to `data/orbit_cache/modems.json`. The dashboard `/orbit` page renders each modem
+with a quota bar, "days to empty" forecast, and a predictive WhatsApp alert
+(`burn_rate.py`) when the remaining balance will be exhausted before the next
+renewal window.
+
+### How It Works
+1. **Catalog** — `config/orbit_targets.csv` (or private Excel catalog) lists
+   12 modems with `no,imei,phone,location,ssid,status,latitude,longitude`.
+   Modems with `status=IMEI_PENDING` are skipped (no valid IMEI yet); the
+   remaining 10 are scraped every round.
+2. **Live scrape** — a headless Chrome session logs into the portal and reads
+   the "Paket Aktif" panel for each modem. Quota, expiry, and status are
+   parsed with strict guards against stray SSID / IMEI numbers and
+   `DRIVER_UNAVAILABLE` zero-quota overwrites.
+3. **Burn-rate forecast** — `orbit/burn_rate.py` computes `GB/day` burn rate
+   from the active package, projects days-to-empty, and classifies the alert
+   level (`OK` / `WARNING` / `CRITICAL`). When `WA_ALERT_ENABLED` is set, a
+   WhatsApp notification fires on crossing `CRITICAL`.
+4. **Cache** — results land in `data/orbit_cache/modems.json` under a lock so
+   concurrent reads (dashboard, Orbit page) never see a half-written cache.
+
+### Dashboard Integration
+- **Orbit page** (`/orbit`): 12 modem cards sorted by lowest-quota-first by
+  default; manual "Refresh All" triggers an immediate live scrape in the
+  background, with a non-blocking progress dialog.
+- **Interactive Leaflet map**: modems with valid coordinates (all 12, plus
+  regional fallbacks from `map_data.py` for any blank row) are plotted
+  alongside the 18 Netcare branch pins on the top-of-dashboard map.
+- **Auto-refresh**: the `/orbit` page reloads from the server cache every
+  300s with a visible countdown.
+
+### Running It
+```bash
+# One-off sync round (repeatable for testing)
+uv run mrtg-cmp orbit -n 1
+
+# Continuous daemon
+uv run mrtg-cmp orbit
+```
+
+---
+
 ## CLI Command Reference
 
 | Command | Description | Example |
@@ -346,8 +369,10 @@ flat and always re-captures, because it is the "latest" view.
 | `web` | Start FastAPI web server | `mrtg-cmp web --host 0.0.0.0 --port 8000` |
 | `netcare` | Run the TelkomCare branch graph scraper daemon | `mrtg-cmp netcare` |
 | `netcare` (one round) | Scrape all branch graphs once | `mrtg-cmp netcare -n 1` |
+| `orbit` | Run the Telkomsel Orbit modem quota scraper daemon (300s cadence) | `mrtg-cmp orbit` |
+| `orbit` (one round) | Scrape all Orbit modem quotas once | `mrtg-cmp orbit -n 1` |
 | `all` | Run collector and web server concurrently | `mrtg-cmp all --port 8000` |
-| `all` (with scraper) | Also run the Netcare daemon in a thread | `mrtg-cmp all --with-netcare` |
+| `all` (with Netcare scraper) | Also run the Netcare daemon in a thread | `mrtg-cmp all --with-netcare` |
 
 ---
 

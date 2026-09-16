@@ -47,7 +47,17 @@ from typing import Any
 
 logger = logging.getLogger("mrtg_cmp.netcare.targets")
 
-CATALOG_HEADER = ("type", "target", "name", "address", "region", "ocr_enabled", "service_type")
+CATALOG_HEADER = (
+    "type",
+    "target",
+    "name",
+    "address",
+    "region",
+    "ocr_enabled",
+    "service_type",
+    "latitude",
+    "longitude",
+)
 
 #: Project-relative location of the deployment's own catalog, which is ignored by
 #: git; :data:`DEFAULT_CATALOG_EXAMPLE_RELATIVE_PATH` is the tracked template for it.
