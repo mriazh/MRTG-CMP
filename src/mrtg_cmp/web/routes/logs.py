@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
-from mrtg_cmp.auth import require_authenticated_user
+from mrtg_cmp.auth import require_admin
 from mrtg_cmp.config import settings
 
 from ..dependencies import templates
@@ -19,7 +19,7 @@ router = APIRouter()
 @router.get("/logs", response_class=HTMLResponse)
 def logs_view(
     request: Request,
-    current_user: dict[str, Any] = Depends(require_authenticated_user),
+    current_user: dict[str, Any] = Depends(require_admin),
 ) -> Any:
     return templates.TemplateResponse(
         request=request,
@@ -38,7 +38,7 @@ def api_logs_tail(
     lines: int = Query(default=200, ge=10, le=1000),
     level: str = Query(default="ALL"),
     search: str | None = Query(default=None),
-    current_user: dict[str, Any] = Depends(require_authenticated_user),
+    current_user: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     """Return the tail of the system log file with level and substring filters."""
     log_path = Path(settings.log_file) if settings.log_file else None
@@ -79,7 +79,7 @@ def api_logs_tail(
 
 @router.get("/api/logs/download")
 def api_logs_download(
-    current_user: dict[str, Any] = Depends(require_authenticated_user),
+    current_user: dict[str, Any] = Depends(require_admin),
 ) -> Response:
     """Download the system log file as a text/plain attachment."""
     log_path = Path(settings.log_file) if settings.log_file else None

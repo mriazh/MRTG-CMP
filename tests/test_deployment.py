@@ -137,6 +137,7 @@ def test_unit_is_sandboxed(unit: str) -> None:
     text = _unit(unit).read_text(encoding="utf-8")
     assert "NoNewPrivileges=true" in text
     assert "ProtectSystem=strict" in text
+    assert "UMask=0077" in text
 
 
 @pytest.mark.parametrize("unit", EXPECTED_UNITS)

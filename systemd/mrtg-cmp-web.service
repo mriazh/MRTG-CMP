@@ -7,6 +7,7 @@ Wants=network-online.target
 Type=simple
 User=@APP_USER@
 Group=@APP_USER@
+UMask=0077
 WorkingDirectory=@APP_DIR@
 EnvironmentFile=-@APP_DIR@/config/.env
 EnvironmentFile=-@APP_DIR@/.env

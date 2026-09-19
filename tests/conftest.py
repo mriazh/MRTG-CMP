@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
 
-from mrtg_cmp.auth import hash_password
+from mrtg_cmp.auth import hash_password, reset_login_rate_limit
 from mrtg_cmp.config import settings
 from mrtg_cmp.db import Database, TrafficSample
 from mrtg_cmp.web.app import app
@@ -102,6 +102,17 @@ def isolated_orbit_catalog(tmp_path: Path) -> Iterator[Path]:
         yield missing
     finally:
         settings.orbit_catalog_file = previous
+
+
+@pytest.fixture(autouse=True)
+def isolated_login_rate_limit() -> Iterator[None]:
+    """Clear the process-wide login throttle so lockout tests cannot leak."""
+
+    reset_login_rate_limit()
+    try:
+        yield
+    finally:
+        reset_login_rate_limit()
 
 
 @pytest.fixture

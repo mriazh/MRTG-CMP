@@ -5,11 +5,18 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+import pytest
+
 from mrtg_cmp.auth import (
+    LOGIN_MAX_ATTEMPTS,
+    clear_login_failures,
     create_user_session,
     ensure_admin_user,
     get_session_user,
     hash_password,
+    login_lockout_remaining,
+    record_login_failure,
+    reset_login_rate_limit,
     revoke_session,
     verify_password,
 )
@@ -63,6 +70,51 @@ def test_ensure_admin_user_updates_password(tmp_path: Path) -> None:
     assert verify_password("RotatedPassword2!", user["password_hash"]) is True
     # And the old password no longer works
     assert verify_password("InitialPassword1!", user["password_hash"]) is False
+
+
+def test_ensure_admin_user_never_falls_back_to_a_known_password(tmp_path: Path) -> None:
+    """Without ADMIN_PASSWORD the seed uses a random password, never 'admin123' (CWE-798)."""
+    db = Database(tmp_path / "auth_random_test.db")
+    db.initialize()
+
+    user = ensure_admin_user(database=db, cfg=Settings(admin_username="admin", admin_password=None))
+
+    assert verify_password("admin123", user["password_hash"]) is False
+    assert verify_password("", user["password_hash"]) is False
+
+
+def test_login_rate_limit_locks_out_after_max_attempts() -> None:
+    """Five consecutive failures lock the IP/username pair for the lockout window."""
+    reset_login_rate_limit()
+    ip, username = "203.0.113.7", "admin"
+
+    for _ in range(LOGIN_MAX_ATTEMPTS - 1):
+        assert record_login_failure(ip, username) == 0
+    assert login_lockout_remaining(ip, username) == 0
+
+    assert record_login_failure(ip, username) > 0
+    assert login_lockout_remaining(ip, username) > 0
+    assert login_lockout_remaining(ip, username) <= 900
+    # A different account from the same host is throttled too (per-IP key).
+    assert login_lockout_remaining(ip, "other") > 0
+
+    clear_login_failures(ip, username)
+    assert login_lockout_remaining(ip, username) == 0
+
+
+def test_login_rate_limit_expires_within_the_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Failures older than the lockout window stop counting."""
+    reset_login_rate_limit()
+    import mrtg_cmp.auth as auth_module
+
+    base = time.monotonic()
+    monkeypatch.setattr(auth_module.time, "monotonic", lambda: base)
+    for _ in range(LOGIN_MAX_ATTEMPTS):
+        record_login_failure("198.51.100.9", "operator")
+    assert login_lockout_remaining("198.51.100.9", "operator") > 0
+
+    monkeypatch.setattr(auth_module.time, "monotonic", lambda: base + 901)
+    assert login_lockout_remaining("198.51.100.9", "operator") == 0
 
 
 def test_ensure_admin_user_strips_whitespace_and_updates_password(tmp_path: Path) -> None:

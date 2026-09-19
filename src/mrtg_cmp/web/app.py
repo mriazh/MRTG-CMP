@@ -15,7 +15,7 @@ from typing import Any
 from fastapi import Depends, FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from ..auth import ensure_admin_user, require_authenticated_user
+from ..auth import ensure_admin_user, require_admin
 from ..config import settings
 from ..db import Database
 from ..logging_setup import configure_logging
@@ -82,7 +82,7 @@ app.include_router(console.router)
 # 6. Tunnel Watchdog Diagnostics & Auto-Healing
 @app.get("/api/tunnel/diagnose")
 def api_tunnel_diagnose(
-    current_user: dict[str, Any] = Depends(require_authenticated_user),
+    current_user: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     """Perform live triangulation diagnostic on the RouterOS tunnel connection."""
     from ..tunnel_watchdog import tunnel_watchdog
@@ -106,7 +106,7 @@ def api_tunnel_diagnose(
 
 @app.post("/api/tunnel/restart")
 def api_tunnel_restart(
-    current_user: dict[str, Any] = Depends(require_authenticated_user),
+    current_user: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     """Safely trigger VPN restart with cooldown guard."""
     from ..tunnel_watchdog import tunnel_watchdog

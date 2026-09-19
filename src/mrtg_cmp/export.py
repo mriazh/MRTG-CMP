@@ -18,6 +18,16 @@ from .graph_renderer import calculate_statistics
 
 WIB_OFFSET = timedelta(hours=7)
 
+#: Leading characters that make Excel / LibreOffice evaluate a cell as a formula (CWE-1236).
+_FORMULA_PREFIXES = ("=", "+", "-", "@")
+
+
+def _sanitize_cell(value: Any) -> Any:
+    """Neutralise formula injection by prefixing dangerous cells with an apostrophe."""
+    if isinstance(value, str) and value.startswith(_FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
 
 def _format_wib(epoch: int | float | None, iso_utc: str) -> str:
     """Format an epoch or ISO UTC string to WIB (UTC+7) string representation."""
@@ -73,17 +83,20 @@ def export_csv(
 
         writer.writerow(
             [
-                ts_utc_str,
-                ts_wib_str,
-                interface_name,
-                rx_bytes,
-                tx_bytes,
-                f"{rx_bps:.2f}",
-                f"{tx_bps:.2f}",
-                f"{rx_mbps:.3f}",
-                f"{tx_mbps:.3f}",
-                uptime,
-                status,
+                _sanitize_cell(value)
+                for value in (
+                    ts_utc_str,
+                    ts_wib_str,
+                    interface_name,
+                    rx_bytes,
+                    tx_bytes,
+                    f"{rx_bps:.2f}",
+                    f"{tx_bps:.2f}",
+                    f"{rx_mbps:.3f}",
+                    f"{tx_mbps:.3f}",
+                    uptime,
+                    status,
+                )
             ]
         )
 
@@ -228,7 +241,7 @@ def export_excel(
         ]
 
         for col_idx, val in enumerate(row_vals, start=1):
-            cell = ws.cell(row=current_row, column=col_idx, value=val)
+            cell = ws.cell(row=current_row, column=col_idx, value=_sanitize_cell(val))
             cell.font = data_font
             cell.border = cell_border
 

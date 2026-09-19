@@ -12,7 +12,9 @@ from typing import Any
 import pytest
 from starlette.testclient import TestClient
 
+from mrtg_cmp.auth import LOGIN_MAX_ATTEMPTS, hash_password
 from mrtg_cmp.config import settings
+from mrtg_cmp.db import Database
 from mrtg_cmp.netcare.targets import NetcareTarget
 
 TEMPLATES_DIR = Path(__file__).resolve().parents[1] / "src" / "mrtg_cmp" / "web" / "templates"
@@ -2120,6 +2122,50 @@ def test_api_logs_download_returns_attachment(
     assert "attachment" in content_disposition
     assert "mrtg-cmp.log" in content_disposition
     assert resp.text.replace("\r\n", "\n") == content.replace("\r\n", "\n")
+
+
+def _login_as_viewer(client_with_db: TestClient) -> Any:
+    """Seed a viewer account in the test database and return its session cookies."""
+    Database(settings.database_path).create_user(
+        "viewer", hash_password("ViewerPass1!"), role="viewer"
+    )
+    login_resp = client_with_db.post(
+        "/login", data={"username": "viewer", "password": "ViewerPass1!"}
+    )
+    assert login_resp.status_code in (302, 303, 307)
+    return login_resp.cookies
+
+
+def test_logs_endpoints_reject_viewer_role(client_with_db: TestClient) -> None:
+    """Viewers cannot read the system log page, tail, or download (CWE-862)."""
+    cookies = _login_as_viewer(client_with_db)
+
+    assert client_with_db.get("/logs", cookies=cookies).status_code == 403
+    assert client_with_db.get("/api/logs/tail", cookies=cookies).status_code == 403
+    assert client_with_db.get("/api/logs/download", cookies=cookies).status_code == 403
+
+
+def test_tunnel_endpoints_reject_viewer_role(client_with_db: TestClient) -> None:
+    """Viewers cannot run tunnel diagnostics or restart the tunnel (CWE-862)."""
+    cookies = _login_as_viewer(client_with_db)
+
+    assert client_with_db.get("/api/tunnel/diagnose", cookies=cookies).status_code == 403
+    assert client_with_db.post("/api/tunnel/restart", cookies=cookies).status_code == 403
+
+
+def test_login_rate_limit_blocks_repeated_failures(client_with_db: TestClient) -> None:
+    """Repeated bad credentials lock the client out with 429 (CWE-307)."""
+    for _ in range(LOGIN_MAX_ATTEMPTS):
+        resp = client_with_db.post(
+            "/login", data={"username": "admin", "password": "WrongPassword!"}
+        )
+        assert resp.status_code == 401
+
+    blocked = client_with_db.post(
+        "/login", data={"username": "admin", "password": "admin123"}
+    )
+    assert blocked.status_code == 429
+    assert "Too many failed attempts" in blocked.text
 
 
 def test_audit_log_helper(isolated_log_file: Path) -> None:

@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import os
 import secrets
+import threading
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -14,8 +17,18 @@ from fastapi import Depends, HTTPException, Request, status
 from .config import Settings, settings
 from .db import Database
 
+logger = logging.getLogger(__name__)
+
 SESSION_COOKIE_NAME = "mrtg_session"
 DEFAULT_PBKDF2_ITERATIONS = 260_000
+
+#: Login throttle (CWE-307): a key is locked for LOGIN_LOCKOUT_SECONDS once it
+#: accumulates LOGIN_MAX_ATTEMPTS consecutive failures inside the window.
+LOGIN_MAX_ATTEMPTS = 5
+LOGIN_LOCKOUT_SECONDS = 900
+
+_login_failures: dict[str, list[float]] = {}
+_login_lock = threading.Lock()
 
 
 def hash_password(password: str, salt: bytes | None = None) -> str:
@@ -45,6 +58,52 @@ def verify_password(password: str, hashed_password: str) -> bool:
 
     derived = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
     return hmac.compare_digest(derived, expected)
+
+
+def _login_keys(ip: str, username: str) -> tuple[str, str]:
+    """Return the throttle keys for a login attempt: per-IP and per-username."""
+    return f"ip:{ip}", f"user:{username.strip().lower()}"
+
+
+def login_lockout_remaining(ip: str, username: str) -> int:
+    """Return the seconds left on the login lockout, or 0 when the key is usable."""
+    now = time.monotonic()
+    with _login_lock:
+        for key in _login_keys(ip, username):
+            attempts = [
+                ts for ts in _login_failures.get(key, ()) if now - ts < LOGIN_LOCKOUT_SECONDS
+            ]
+            if attempts:
+                _login_failures[key] = attempts
+            if len(attempts) >= LOGIN_MAX_ATTEMPTS:
+                return int(LOGIN_LOCKOUT_SECONDS - (now - attempts[0])) + 1
+    return 0
+
+
+def record_login_failure(ip: str, username: str) -> int:
+    """Record a failed login against the IP and username keys; return the lockout seconds."""
+    now = time.monotonic()
+    with _login_lock:
+        for key in _login_keys(ip, username):
+            attempts = _login_failures.setdefault(key, [])
+            attempts.append(now)
+            _login_failures[key] = [
+                ts for ts in attempts if now - ts < LOGIN_LOCKOUT_SECONDS
+            ]
+    return login_lockout_remaining(ip, username)
+
+
+def clear_login_failures(ip: str, username: str) -> None:
+    """Drop the failure history for a key pair after a successful login."""
+    with _login_lock:
+        for key in _login_keys(ip, username):
+            _login_failures.pop(key, None)
+
+
+def reset_login_rate_limit() -> None:
+    """Clear every throttle counter (test isolation)."""
+    with _login_lock:
+        _login_failures.clear()
 
 
 def ensure_admin_user(
@@ -81,7 +140,14 @@ def ensure_admin_user(
             return rotated
         return existing
 
-    initial_password = admin_password or "admin123"
+    initial_password = admin_password or secrets.token_urlsafe(24)
+    if not admin_password:
+        logger.warning(
+            "ADMIN_PASSWORD is not configured; generated a random password for '%s'. "
+            "Copy it from this line, then set ADMIN_PASSWORD in .env: %s",
+            admin_username,
+            initial_password,
+        )
     hashed = hash_password(initial_password)
     user_id = db.create_user(username=admin_username, password_hash=hashed, role='admin')
     user = db.get_user_by_id(user_id)
@@ -269,14 +335,20 @@ def validate_redirect_url(next_url: str | None, base_url: str = "http://localhos
     return next_url
 __all__ = [
     "change_password_and_revoke_sessions",
+    "clear_login_failures",
     "create_user_session",
     "ensure_admin_user",
     "get_current_user_optional",
     "get_db",
     "get_session_user",
     "hash_password",
+    "login_lockout_remaining",
+    "LOGIN_LOCKOUT_SECONDS",
+    "LOGIN_MAX_ATTEMPTS",
+    "record_login_failure",
     "require_admin",
     "require_authenticated_user",
+    "reset_login_rate_limit",
     "revoke_session",
     "SESSION_COOKIE_NAME",
     "validate_redirect_url",

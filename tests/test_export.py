@@ -95,3 +95,45 @@ def test_export_excel_validity() -> None:
     assert ws["C11"].value == "WAN"
     assert ws["D11"].value == 10_000_000
     assert ws["H11"].value == 12.0
+
+
+def test_export_neutralises_formula_injection() -> None:
+    """Cells starting with =, +, -, or @ are prefixed with an apostrophe (CWE-1236)."""
+    samples = [
+        {
+            "timestamp": "2026-09-14T10:00:00Z",
+            "epoch": 1789376400,
+            "rx_bytes": 100_000_000,
+            "tx_bytes": 50_000_000,
+            "rx_bps": 8_000_000.0,
+            "tx_bps": 4_000_000.0,
+            "uptime": '=cmd|\' /c calc\'!A0',
+            "status": "@SUM(1+1)*cmd",
+        },
+        {
+            "timestamp": "2026-09-14T10:05:00Z",
+            "epoch": 1789376700,
+            "rx_bytes": 105_000_000,
+            "tx_bytes": 52_000_000,
+            "rx_bps": 10_000_000.0,
+            "tx_bps": 5_000_000.0,
+            "uptime": "+1+1",
+            "status": "UP",
+        },
+    ]
+
+    csv_text = export_csv(samples, interface_name="-1+cmd").decode("utf-8")
+    reader = list(csv.reader(io.StringIO(csv_text)))
+    assert reader[1][2] == "'-1+cmd"
+    assert reader[1][9] == "'=cmd|' /c calc'!A0"
+    assert reader[1][10] == "'@SUM(1+1)*cmd"
+    assert reader[2][9] == "'+1+1"
+    # Benign values stay untouched.
+    assert reader[2][10] == "UP"
+
+    ws = load_workbook(io.BytesIO(export_excel(samples, interface_name="-1+cmd")))["Traffic Report"]
+    assert ws["C11"].value == "'-1+cmd"
+    assert ws["J11"].value == "'=cmd|' /c calc'!A0"
+    assert ws["K11"].value == "'@SUM(1+1)*cmd"
+    assert ws["J12"].value == "'+1+1"
+    assert ws["K12"].value == "UP"

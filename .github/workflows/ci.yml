@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run Ruff Linter
+        run: uv run ruff check src tests
+
+      - name: Run Mypy Type Checker
+        run: uv run mypy src
+
+      - name: Run Test Suite
+        run: uv run pytest tests/test_auth.py tests/test_export.py tests/test_deployment.py -v

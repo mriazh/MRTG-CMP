@@ -10,9 +10,12 @@ from starlette import status
 
 from mrtg_cmp.auth import (
     SESSION_COOKIE_NAME,
+    clear_login_failures,
     create_user_session,
     get_current_user_optional,
     get_db,
+    login_lockout_remaining,
+    record_login_failure,
     revoke_session,
     validate_redirect_url,
     verify_password,
@@ -80,14 +83,33 @@ def process_login(
     # Validate redirect URL to prevent open redirects (CWE-601)
     next = validate_redirect_url(next)
 
-    user = db.get_user(username.strip())
+    client_ip = request.client.host if request.client is not None else "unknown"
+    username = username.strip()
+
+    lockout = login_lockout_remaining(client_ip, username)
+    if lockout > 0:
+        return templates.TemplateResponse(
+            request=request,
+            name="login.html",
+            context=_login_context(
+                next,
+                f"Too many failed attempts. Try again in {lockout} seconds.",
+                None,
+            ),
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+    user = db.get_user(username)
     if not user or not verify_password(password, user["password_hash"]):
+        record_login_failure(client_ip, username)
         return templates.TemplateResponse(
             request=request,
             name="login.html",
             context=_login_context(next, "Invalid username or password", None),
             status_code=status.HTTP_401_UNAUTHORIZED,
         )
+
+    clear_login_failures(client_ip, username)
 
     token, ttl = create_user_session(
         database=db,
