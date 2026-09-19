@@ -2570,8 +2570,52 @@ def test_dashboard_renders_the_map_container(
     assert 'id="map-card"' in resp.text
     assert 'id="map"' in resp.text
     assert 'class="map-container"' in resp.text
-    # Above the grid, so the toggle is reachable without scrolling past 18 cards.
+    # Above the grid so the map is visible without scrolling past 18 cards.
     assert resp.text.index('id="map-section"') < resp.text.index('id="netcare-section"')
+
+
+def test_map_is_always_visible_without_a_view_toggle(
+    client_with_db: TestClient, map_catalogs: None
+) -> None:
+    """Map is rendered permanently; no grid/map view toggle exists."""
+
+    login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
+    resp = client_with_db.get("/", cookies=login_resp.cookies)
+
+    assert resp.status_code == 200
+    assert 'id="map-view-toggle"' not in resp.text
+    assert "Grid View" not in resp.text
+    assert "Map View" not in resp.text
+    assert 'id="map-view-grid-btn"' not in resp.text
+    assert 'id="map-view-map-btn"' not in resp.text
+    # map-body no longer carries hidden attribute; it is always displayed
+    assert 'id="map-body"' in resp.text
+    assert 'hidden' not in resp.text.split('id="map-body"')[1][:50]
+
+
+def test_map_is_built_on_load_with_bounded_viewport(
+    client_with_db: TestClient
+) -> None:
+    """Leaflet initialised on load with minZoom=4, maxZoom=18, centre [-2.5,118.0] zoom 5."""
+
+    script = _dashboard_template()
+
+    # Map created with strict zoom band so zooming out never tiles the whole world.
+    assert "minZoom: MAP_MIN_ZOOM" in script or "{ minZoom: 4" in script
+    assert "maxZoom: MAP_MAX_ZOOM" in script or "{ maxZoom: 18" in script
+    # TileLayer also carries the same limits (redundant safety).
+    assert "minZoom: MAP_MIN_ZOOM" in script or '"minZoom": 4' in script
+    assert "maxZoom: MAP_MAX_ZOOM" in script or '"maxZoom": 18' in script
+    # Initial view centred on Indonesian archipelago.
+    assert '[-2.5, 118.0]' in script or "[-2.5,118.0]" in script or "[-2.5, 118.0]" in script
+    # Default zoom level 5.
+    assert "MAP_ZOOM = 5" in script or "setView(" in script
+    # Immediate invalidateSize on load.
+    assert "map.invalidateSize()" in script
+    # No applyView / toggle wiring.
+    assert "applyView" not in script
+    assert "map-view-grid-btn" not in script
+    assert "map-view-map-btn" not in script
 
 
 def test_map_assets_are_served_from_the_bundle_not_a_cdn(
@@ -2590,34 +2634,6 @@ def test_map_assets_are_served_from_the_bundle_not_a_cdn(
         asset_resp = client_with_db.get(f"/static/leaflet/{asset}", cookies=login_resp.cookies)
         assert asset_resp.status_code == 200, f"{asset} is not served from the bundle"
 
-
-def test_map_offers_a_grid_and_map_view_toggle(
-    client_with_db: TestClient, map_catalogs: None
-) -> None:
-    """FR-61.2: the toggle switches between the card grid and the map."""
-
-    login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
-    resp = client_with_db.get("/", cookies=login_resp.cookies)
-
-    assert resp.status_code == 200
-    assert 'id="map-view-toggle"' in resp.text
-    assert "Grid View" in resp.text
-    assert "Map View" in resp.text
-    assert 'id="map-view-grid-btn"' in resp.text
-    assert 'id="map-view-map-btn"' in resp.text
-
-
-def test_map_toggle_is_wired_to_the_view_switch(client_with_db: TestClient) -> None:
-    """Rendered buttons nobody listens to would be a dead control."""
-
-    script = _dashboard_template()
-
-    assert "btn.addEventListener('click', () => applyView(btn.dataset.view))" in script
-    assert "function applyView(view)" in script
-    # Grid View is the default landing state; otherwise the map would push 18 cards down.
-    assert "applyView('grid');" in script
-    # A map built inside a hidden panel stays a grey sliver without a re-measure.
-    assert "map.invalidateSize();" in script
 
 
 def test_map_popups_escape_catalog_values(client_with_db: TestClient) -> None:

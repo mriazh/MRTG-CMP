@@ -21,44 +21,12 @@ vendored under /static/leaflet so an air-gapped deployment never reaches a CDN. 
     flex-wrap: wrap;
 }
 
-.map-view-toggle {
-    display: inline-flex;
-    border: 1px solid var(--border-color);
-    border-radius: 6px;
-    overflow: hidden;
-}
-
-.map-view-toggle button {
-    padding: 0.35rem 0.9rem;
-    font-size: 0.75rem;
-    font-weight: 600;
-    background: transparent;
-    color: var(--text-muted);
-    border: none;
-    cursor: pointer;
-}
-
-.map-view-toggle button + button {
-    border-left: 1px solid var(--border-color);
-}
-
-.map-view-toggle button.active {
-    background: var(--primary-color, #2563eb);
-    color: #fff;
-}
-
 .map-container {
     width: 100%;
     height: 560px;
     border-radius: 6px;
     background: var(--border-color);
     z-index: 0;
-}
-
-/* The map is collapsed in Grid View; display:none keeps Leaflet from measuring a
-   zero-height container, and the script calls invalidateSize() on expand. */
-.map-body[hidden] {
-    display: none;
 }
 
 .map-legend {
@@ -1254,8 +1222,7 @@ vendored under /static/leaflet so an air-gapped deployment never reaches a CDN. 
 {% endblock %}
 
 {% block content %}
-{# Phase 61: interactive map section. It sits above the Netcare grid so a
-toggle there collapses the map without the operator losing scroll position. #}
+{# Phase 61: interactive map section. It sits above the Netcare grid. #}
 <div class="section-divider" id="map-section">
     <h2>Network Map &middot; {{ map_marker_count }} Located Targets</h2>
 </div>
@@ -1268,10 +1235,6 @@ toggle there collapses the map without the operator losing scroll position. #}
                 <span class="status-dot up" style="width: 7px; height: 7px;"></span>
                 {{ map_marker_count }} targets plotted
             </span>
-            <div class="map-view-toggle" id="map-view-toggle" role="group" aria-label="Switch between grid and map view">
-                <button type="button" class="map-view-btn active" id="map-view-grid-btn" data-view="grid" aria-pressed="true">Grid View</button>
-                <button type="button" class="map-view-btn" id="map-view-map-btn" data-view="map" aria-pressed="false">Map View</button>
-            </div>
         </div>
     </div>
     <div class="card-body">
@@ -1811,10 +1774,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // -----------------------------------------------------------------------
     // Phase 61: interactive Leaflet map of every located target.
     // -----------------------------------------------------------------------
-    const mapBody = document.getElementById('map-body');
     const mapEl = document.getElementById('map');
-    const gridBtn = document.getElementById('map-view-grid-btn');
-    const mapBtn = document.getElementById('map-view-map-btn');
     const markerCountBadge = document.getElementById('map-marker-count');
     const dataEl = document.getElementById('map-markers-data');
 
@@ -1883,12 +1843,23 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // Fixed zoom band: zoom 0-3 tiles the whole world repeatedly around the
+    // archipelago, which reads as a bug rather than as context.
+    const MAP_MIN_ZOOM = 4;
+    const MAP_MAX_ZOOM = 18;
+    // Indonesia spans ~95E-141E and ~11S-6N; centre the archipelago rather than
+    // a bare zoom level so the initial frame lands on it.
+    const MAP_CENTER = [-2.5, 118.0];
+    const MAP_ZOOM = 5;
+
     function fitToMarkers(map, markers) {
         if (!markers.length) {
             return;
         }
         const bounds = L.latLngBounds(markers.map(marker => [marker.latitude, marker.longitude]));
-        map.fitBounds(bounds.pad(0.15), { maxZoom: 12 });
+        // animate:false frames the markers on the first paint instead of sliding
+        // from the default centre, so no intermediate world-wide frame is shown.
+        map.fitBounds(bounds.pad(0.15), { maxZoom: 10, animate: false });
     }
 
     let map = null;
@@ -1907,49 +1878,22 @@ document.addEventListener('DOMContentLoaded', () => {
         if (map || !mapEl || typeof L === 'undefined') {
             return;
         }
-        map = L.map(mapEl).setView([-2.0, 118.0], 5);
+        map = L.map(mapEl, { minZoom: MAP_MIN_ZOOM, maxZoom: MAP_MAX_ZOOM })
+            .setView(MAP_CENTER, MAP_ZOOM);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            maxZoom: 19,
+            minZoom: MAP_MIN_ZOOM,
+            maxZoom: MAP_MAX_ZOOM,
             attribution: '&copy; OpenStreetMap contributors',
         }).addTo(map);
         markerLayer = L.layerGroup().addTo(map);
         renderMarkers(map, markerLayer, markers);
         fitToMarkers(map, markers);
+        // Leaflet caches the container size, so a map built before layout settles
+        // renders as a grey sliver until it is told to re-measure.
+        map.invalidateSize();
     }
 
-    function applyView(view) {
-        const isMap = view === 'map';
-        if (isMap) {
-            ensureMap();
-            if (mapBody) {
-                mapBody.hidden = false;
-            }
-            // Leaflet caches the container size, so a map initialised inside a
-            // hidden panel renders as a grey sliver until it is told to re-measure.
-            if (map) {
-                map.invalidateSize();
-            }
-        } else if (mapBody) {
-            mapBody.hidden = true;
-        }
-        if (gridBtn) {
-            gridBtn.classList.toggle('active', !isMap);
-            gridBtn.setAttribute('aria-pressed', String(!isMap));
-        }
-        if (mapBtn) {
-            mapBtn.classList.toggle('active', isMap);
-            mapBtn.setAttribute('aria-pressed', String(isMap));
-        }
-    }
-
-    [gridBtn, mapBtn].forEach(btn => {
-        if (btn) {
-            btn.addEventListener('click', () => applyView(btn.dataset.view));
-        }
-    });
-
-    // Landing state: open map by default when requested or keep grid default with instant expand
-    applyView('grid');
+    ensureMap();
     if (markerCountBadge) {
         markerCountBadge.dataset.count = String(markers.length);
     }
