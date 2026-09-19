@@ -14,7 +14,11 @@ from typing import TYPE_CHECKING, Any
 
 from mrtg_cmp.orbit.burn_rate import QuotaBurnRateTracker, send_burn_alert
 from mrtg_cmp.orbit.cache import OrbitCache
-from mrtg_cmp.orbit.scraper import OrbitModemStatus, OrbitScraper
+from mrtg_cmp.orbit.scraper import (
+    NO_PACKAGE_EXPIRY_STR,
+    OrbitModemStatus,
+    OrbitScraper,
+)
 from mrtg_cmp.orbit.targets import OrbitModem
 from mrtg_cmp.scrape_alerts import (
     ALERT_STATE_FILENAME,
@@ -145,13 +149,14 @@ class OrbitService:
     def _save_cache_merging_errors(
         self, cache: OrbitCache, statuses: list[OrbitModemStatus]
     ) -> None:
-        """Persist scraped statuses, retaining cached quota for failed/empty modems.
+        """Persist scraped statuses, retaining cached quota for failed rounds.
 
-        A scrape round that returns DRIVER_UNAVAILABLE, or yields 0.0 GB for
-        every modem while the cache already holds valid quota data, must not
-        overwrite the good cached values. For each modem we keep the freshly
-        scraped status unless it is a hard driver error, or it returned 0.0 GB
-        while a previously cached status for that modem had a real quota.
+        Retention only fires when the round itself looks broken: any modem hit
+        DRIVER_UNAVAILABLE, or every modem that reported quota came back 0.0 GB
+        while the cache already holds valid numbers. A modem that legitimately
+        has no active data package (expiry marker "No active package") really
+        does hold 0.0 GB, so its fresh status is saved instead of reverting to
+        stale non-zero quota.
         """
         previous = cache.load()
         prev_by_no: dict[int, OrbitModemStatus] = {}
@@ -162,13 +167,20 @@ class OrbitService:
         has_driver_unavailable = any(
             s.error == "DRIVER_UNAVAILABLE" for s in statuses
         )
-        all_zero = all(
-            s.total_remaining_gb == 0.0 and s.total_quota_gb == 0.0 for s in statuses
+        # Zero-quota readings from modems that openly report no package are
+        # trustworthy; only the rest of the round can be judged all-zero.
+        no_package = {
+            s.target.no for s in statuses if s.earliest_expiry_str == NO_PACKAGE_EXPIRY_STR
+        }
+        reported = [s for s in statuses if s.target.no not in no_package]
+        all_zero = bool(reported) and all(
+            s.total_remaining_gb == 0.0 and s.total_quota_gb == 0.0 for s in reported
         )
         cache_has_valid_quota = any(
             s.total_quota_gb > 0.0 or s.total_remaining_gb > 0.0
             for s in (previous or [])
         )
+        round_anomalous = has_driver_unavailable or (all_zero and cache_has_valid_quota)
 
         to_save: list[OrbitModemStatus] = []
         retained = 0
@@ -176,7 +188,9 @@ class OrbitService:
             prior = prev_by_no.get(st.target.no)
             failed_driver = st.error == "DRIVER_UNAVAILABLE"
             empty_over_valid = (
-                not st.error
+                round_anomalous
+                and not st.error
+                and st.target.no not in no_package
                 and st.total_remaining_gb == 0.0
                 and st.total_quota_gb == 0.0
                 and prior is not None

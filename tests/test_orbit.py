@@ -1147,6 +1147,74 @@ def test_orbit_service_sync_all(tmp_path: Path) -> None:
     assert loaded[1].total_remaining_gb == 50.0
 
 
+def test_cache_saves_zero_quota_when_modem_has_no_active_package(tmp_path: Path) -> None:
+    """A modem with no active package keeps its genuine 0.0 GB status."""
+    cache = OrbitCache(tmp_path / "modems.json")
+    target = OrbitModem(1, "860000000000001", "081200000001", "Room 1", "SSID-1")
+    cache.save([
+        OrbitModemStatus(
+            target=target,
+            total_remaining_gb=42.0,
+            total_quota_gb=50.0,
+            earliest_expiry_str="08 Oct 2026",
+            earliest_days_left=7,
+            last_scraped_at="2026-10-01 10:00:00",
+        )
+    ])
+
+    service = OrbitService()
+    service._save_cache_merging_errors(cache, [
+        OrbitModemStatus(
+            target=target,
+            total_remaining_gb=0.0,
+            total_quota_gb=0.0,
+            packages=[],
+            earliest_expiry_str="No active package",
+            earliest_days_left=0,
+            last_scraped_at="2026-10-08 10:00:00",
+        )
+    ])
+
+    loaded = cache.load()
+    assert loaded is not None
+    assert len(loaded) == 1
+    assert loaded[0].total_remaining_gb == 0.0
+    assert loaded[0].total_quota_gb == 0.0
+    assert loaded[0].earliest_expiry_str == "No active package"
+    assert loaded[0].last_scraped_at == "2026-10-08 10:00:00"
+
+
+def test_cache_retains_quota_when_every_modem_returns_zero(tmp_path: Path) -> None:
+    """An all-zero round with no package markers still keeps cached quota."""
+    cache = OrbitCache(tmp_path / "modems.json")
+    target = OrbitModem(1, "860000000000001", "081200000001", "Room 1", "SSID-1")
+    cache.save([
+        OrbitModemStatus(
+            target=target,
+            total_remaining_gb=42.0,
+            total_quota_gb=50.0,
+            earliest_expiry_str="08 Oct 2026",
+            earliest_days_left=7,
+            last_scraped_at="2026-10-01 10:00:00",
+        )
+    ])
+
+    service = OrbitService()
+    service._save_cache_merging_errors(cache, [
+        OrbitModemStatus(
+            target=target,
+            total_remaining_gb=0.0,
+            total_quota_gb=0.0,
+            last_scraped_at="2026-10-08 10:00:00",
+        )
+    ])
+
+    loaded = cache.load()
+    assert loaded is not None
+    assert loaded[0].total_remaining_gb == 42.0
+    assert loaded[0].last_scraped_at == "2026-10-01 10:00:00"
+
+
 def test_orbit_service_sync_in_background_concurrency() -> None:
     """Duplicate sync triggers are rejected while a sync is in progress."""
     service = OrbitService()

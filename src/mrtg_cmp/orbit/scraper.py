@@ -27,6 +27,9 @@ NO_PACKAGE_MARKERS: tuple[str, ...] = (
     "beli kuota internet",
 )
 
+# Expiry marker written for modems that legitimately hold no data package.
+NO_PACKAGE_EXPIRY_STR = "No active package"
+
 
 def has_no_active_package(text: str) -> bool:
     """Return True when page text shows the account has no active package.
@@ -641,7 +644,7 @@ class OrbitScraper:
                     total_quota_gb=0.0,
                     multimedia_active=False,
                     packages=[],
-                    earliest_expiry_str="No active package",
+                    earliest_expiry_str=NO_PACKAGE_EXPIRY_STR,
                     earliest_days_left=0,
                     last_scraped_at=now_str,
                     error=None,
