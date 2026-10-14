@@ -38,6 +38,9 @@ data/*.db-wal
 # TelkomCare scraper runtime artifacts (graph cache, status manifest, session cookies)
 data/netcare_cache/
 
+# Chromium temp user-data profiles used by on-demand Netcare queries
+data/netcare_profiles/
+
 # Telkomsel Orbit scraper runtime artifacts (quota cache, status manifest)
 data/orbit_cache/
 

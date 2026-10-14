@@ -139,7 +139,7 @@ class Settings(BaseSettings):
     netcare_poll_interval_seconds: int = 300
     netcare_cache_dir: Path = Path("data/netcare_cache")
     netcare_catalog_file: Path | None = None
-    netcare_profile_dir: Path = Path("~/.mrtg-cmp-scraper-profile")
+    netcare_profile_dir: Path = Path("data/netcare_profiles")
     netcare_headless: bool = True
     netcare_auto_login: bool = True
     netcare_page_timeout_seconds: int = 30
