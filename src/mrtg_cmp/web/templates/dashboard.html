@@ -75,13 +75,13 @@ vendored under /static/leaflet so an air-gapped deployment never reaches a CDN. 
     display: inline-block;
     margin-top: 0.4rem;
     font-size: 0.78rem;
-    color: var(--primary-color, #2563eb);
+    color: var(--primary, #2563eb);
 }
 
 /* Applied to a card when its marker popup's "View card" link is used. */
 .netcare-card.map-target-highlight,
 .orbit-card.map-target-highlight {
-    outline: 3px solid var(--primary-color, #2563eb);
+    outline: 3px solid var(--primary, #2563eb);
     outline-offset: 2px;
 }
 
@@ -960,8 +960,8 @@ vendored under /static/leaflet so an air-gapped deployment never reaches a CDN. 
     padding: 0.5rem 0.65rem;
     border: 1px solid var(--border-color);
     border-radius: 6px;
-    background: var(--bg-color);
-    color: var(--text-color);
+    background: var(--card-bg);
+    color: var(--text-main);
     font-size: 0.85rem;
     box-sizing: border-box;
 }
@@ -1467,74 +1467,65 @@ vendored under /static/leaflet so an air-gapped deployment never reaches a CDN. 
         <div class="netcare-modal-header">
             <div style="display: flex; align-items: center; gap: 0.5rem;">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color: var(--primary);"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
-                <div>
-                    <div class="netcare-modal-title" id="netcare-edit-modal-title">Add New Link</div>
-                    <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.25rem;">Configure TelkomCare branch target metadata</div>
-                </div>
+                <div class="netcare-modal-title" id="netcare-edit-modal-title">Add New Link</div>
             </div>
             <button type="button" id="netcare-edit-modal-close" class="netcare-modal-close" aria-label="Close">&times;</button>
         </div>
-        <form id="netcare-edit-form" class="netcare-form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 0.5rem;" autocomplete="off">
+        <form id="netcare-edit-form" class="orbit-form-grid" autocomplete="off">
             <input type="hidden" id="netcare-edit-original-id" value="">
-            <div style="display: flex; gap: 0.75rem;">
-                <div style="flex: 1;">
-                    <label for="netcare-edit-target" style="display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.25rem;">Target ID *</label>
-                    <input type="text" id="netcare-edit-target" required class="form-control netcare-form-input" placeholder="e.g. 123-1" style="background: var(--bg-color); border: 1px solid var(--border-color); color: var(--text-color);">
-                </div>
-                <div style="flex: 1;">
-                    <label for="netcare-edit-type" style="display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.25rem;">Target Type *</label>
-                    <select id="netcare-edit-type" class="form-control netcare-form-input" style="width: 100%; box-sizing: border-box; padding: 0.4rem 0.6rem;">
-                        <option value="SID">SID</option>
-                        <option value="Graph-title">Graph-title</option>
-                    </select>
-                </div>
+            <div>
+                <label for="netcare-edit-target">Target ID *</label>
+                <input type="text" id="netcare-edit-target" required placeholder="e.g. 123-1">
             </div>
             <div>
-                <label for="netcare-edit-name" style="display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.25rem;">Branch Name *</label>
-                <input type="text" id="netcare-edit-name" required class="form-control netcare-form-input" placeholder="e.g. Jakarta Thamrin Link 01">
+                <label for="netcare-edit-type">Target Type *</label>
+                <select id="netcare-edit-type">
+                    <option value="SID">SID</option>
+                    <option value="Graph-title">Graph-title</option>
+                </select>
+            </div>
+            <div style="grid-column: span 2;">
+                <label for="netcare-edit-name">Branch Name *</label>
+                <input type="text" id="netcare-edit-name" required placeholder="e.g. Jakarta Thamrin Link 01">
+            </div>
+            <div style="grid-column: span 2;">
+                <label for="netcare-edit-address">Physical Address</label>
+                <input type="text" id="netcare-edit-address" placeholder="e.g. Jl. M.H. Thamrin No. 1, Jakarta">
             </div>
             <div>
-                <label for="netcare-edit-address" style="display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.25rem;">Physical Address</label>
-                <input type="text" id="netcare-edit-address" class="form-control netcare-form-input" placeholder="e.g. Jl. M.H. Thamrin No. 1, Jakarta">
+                <label for="netcare-edit-region">Region *</label>
+                <select id="netcare-edit-region">
+                    <option value="CGK">CGK Area (CGK)</option>
+                    <option value="SUB">Surabaya (SUB)</option>
+                    <option value="UPG">Makassar (UPG)</option>
+                    <option value="DPS">Denpasar (DPS)</option>
+                    <option value="BPN">Balikpapan (BPN)</option>
+                    <option value="SENTUL">Sentul VPN (SENTUL)</option>
+                </select>
             </div>
-            <div style="display: flex; gap: 0.75rem;">
-                <div style="flex: 1;">
-                    <label for="netcare-edit-region" style="display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.25rem;">Region *</label>
-                    <select id="netcare-edit-region" class="form-control netcare-form-input">
-                        <option value="CGK">CGK Area (CGK)</option>
-                        <option value="SUB">Surabaya (SUB)</option>
-                        <option value="UPG">Makassar (UPG)</option>
-                        <option value="DPS">Denpasar (DPS)</option>
-                        <option value="BPN">Balikpapan (BPN)</option>
-                        <option value="SENTUL">Sentul VPN (SENTUL)</option>
-                    </select>
-                </div>
-                <div style="flex: 1;">
-                    <label for="netcare-edit-service-type" style="display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.25rem;">Service Type *</label>
-                    <select id="netcare-edit-service-type" class="form-control netcare-form-input">
-                        <option value="Astinet">Astinet</option>
-                        <option value="Metro-E">Metro-E</option>
-                        <option value="VPN IP">VPN IP</option>
-                    </select>
-                </div>
+            <div>
+                <label for="netcare-edit-service-type">Service Type *</label>
+                <select id="netcare-edit-service-type">
+                    <option value="Astinet">Astinet</option>
+                    <option value="Metro-E">Metro-E</option>
+                    <option value="VPN IP">VPN IP</option>
+                </select>
             </div>
-            <div style="display: flex; gap: 0.75rem;">
-                <div style="flex: 1;">
-                    <label for="netcare-edit-latitude" style="display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.25rem;">Latitude</label>
-                    <input type="number" step="any" id="netcare-edit-latitude" class="form-control netcare-form-input" placeholder="-6.2088">
-                </div>
-                <div style="flex: 1;">
-                    <label for="netcare-edit-longitude" style="display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.25rem;">Longitude</label>
-                    <input type="number" step="any" id="netcare-edit-longitude" class="form-control netcare-form-input" placeholder="106.8456">
-                </div>
+            <div>
+                <label for="netcare-edit-latitude">Latitude</label>
+                <input type="number" step="any" id="netcare-edit-latitude" placeholder="-6.2088">
             </div>
-            <div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.25rem;">
-                <input type="checkbox" id="netcare-edit-ocr" checked style="cursor: pointer;">
-                <label for="netcare-edit-ocr" style="font-size: 0.8rem; cursor: pointer; user-select: none;">Enable OCR Scraper (Active Link)</label>
+            <div>
+                <label for="netcare-edit-longitude">Longitude</label>
+                <input type="number" step="any" id="netcare-edit-longitude" placeholder="106.8456">
             </div>
-            <div style="display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid var(--border-color);">
-                <button type="button" id="netcare-btn-cancel-edit" class="btn btn-secondary" style="padding: 0.4rem 0.85rem; font-size: 0.8rem; color: var(--primary-color); background: transparent; border: none;">Cancel</button>
-                <button type="submit" id="netcare-btn-save" class="btn btn-primary" style="padding: 0.4rem 0.85rem; font-size: 0.8rem; background: var(--primary-color); color: white; border: none;">Save Link</button>
+            <div style="grid-column: span 2; display: flex; align-items: center; gap: 0.5rem; margin-top: 0.25rem;">
+                <input type="checkbox" id="netcare-edit-ocr" checked style="cursor: pointer; width: auto;">
+                <label for="netcare-edit-ocr" title="Uncheck to park link without deleting" style="font-size: 0.8rem; cursor: pointer; user-select: none; margin-bottom: 0;">Active Link (include in scrape rounds)</label>
+            </div>
+            <div style="grid-column: span 2; display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--border-color);">
+                <button type="button" id="netcare-btn-cancel-edit" class="btn btn-secondary">Cancel</button>
+                <button type="submit" id="netcare-btn-save" class="btn btn-primary">Save</button>
             </div>
         </form>
     </div>

@@ -2287,23 +2287,58 @@ def test_api_netcare_targets_crud_flow(
     assert "deleted target netcare-crud-1" in log_text
 
 
-def test_dashboard_renders_netcare_crud_ui_elements(
+def test_netcare_edit_modal_orbit_pattern_contracts(
     client_with_db: TestClient,
 ) -> None:
-    """Dashboard HTML must render the Add button, Edit button, and Modals."""
+    """Phase 65.1 & 65.2: Netcare modal matches Orbit pattern,
+    uses defined tokens, omits subtitle, relabels OCR."""
     login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
     resp = client_with_db.get("/", cookies=login_resp.cookies)
     assert resp.status_code == 200
     html = resp.text
 
-    assert 'id="btn-netcare-add"' in html
-    assert 'class="btn-netcare-edit"' in html
-    assert 'id="netcare-edit-modal"' in html
-    assert 'id="netcare-delete-modal"' in html
-    assert 'id="netcare-toast"' in html
-    assert "Save Link" in html
-    assert "Delete Link" in html
-    assert "Confirm Delete" in html
+    # No undefined tokens
+    assert "--primary-color" not in html
+    assert "--bg-color" not in html
+    assert "--text-color" not in html
+
+    # Defined tokens present in form grid / modal styles
+    assert "var(--primary)" in html
+    assert "var(--card-bg)" in html
+    assert "var(--text-main)" in html
+    assert "var(--border-color)" in html
+
+    # Subtitle deleted
+    assert "Configure TelkomCare branch target metadata" not in html
+
+    # Orbit pattern form grid class
+    assert 'class="orbit-form-grid"' in html
+
+    # Row spans for full-width fields
+    assert 'style="grid-column: span 2;"' in html
+
+    # Buttons: Cancel boxed secondary, Save solid primary labeled exactly Save
+    assert 'id="netcare-btn-cancel-edit"' in html
+    assert 'id="netcare-btn-save"' in html
+    assert 'id="netcare-btn-save"' in html
+    assert 'class="btn btn-primary"' in html
+
+    # OCR relabeled
+    assert "Active Link (include in scrape rounds)" in html
+    assert "Uncheck to park link without deleting" in html
+
+
+def test_orbit_save_label_shortening(client_with_db: TestClient) -> None:
+    """Phase 65.3: Orbit modal save button labeled exactly Save."""
+    login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
+    resp = client_with_db.get("/orbit", cookies=login_resp.cookies)
+    assert resp.status_code == 200
+    html = resp.text
+
+    assert 'id="btn-save-orbit-modem"' in html
+    assert "Save Modem" not in html
+    assert ">Save</button>" in html
+
 
 
 # ---------------------------------------------------------------------------
