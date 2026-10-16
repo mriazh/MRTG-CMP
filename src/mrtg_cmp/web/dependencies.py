@@ -222,6 +222,7 @@ def resolve_netcare_window(
     preset: str = "today",
     start_str: str | None = None,
     end_str: str | None = None,
+    fullday: str | None = None,
 ) -> tuple[datetime, datetime]:
     """Resolve a Netcare preset or custom range into a WIB wall-clock window.
 
@@ -233,6 +234,7 @@ def resolve_netcare_window(
         preset=preset or "today",
         start_str=start_str,
         end_str=end_str,
+        fullday=fullday,
     )
     return (
         datetime.fromtimestamp(start_epoch, tz=UTC) + WIB_OFFSET,
@@ -350,14 +352,13 @@ def _orbit_burn_tracker() -> QuotaBurnRateTracker:
 
 
 def _orbit_context() -> dict[str, Any]:
-    """Assemble context data for the Telkomsel Orbit modem dashboard."""
+    """Assemble context data for the Telkomsel Orbit modem dashboard (read-only compute)."""
     catalog = resolve_orbit_catalog(settings.orbit_catalog_file)
     cache = _orbit_cache()
     modems = cache.get_or_seed(catalog)
     stats = filter_stats([m.target for m in modems])
 
     tracker = _orbit_burn_tracker()
-    tracker.record_statuses(modems)
     burn_results = {r.imei: r for r in tracker.compute_all(modems)}
 
     total_remaining = round(sum(m.total_remaining_gb for m in modems), 2)

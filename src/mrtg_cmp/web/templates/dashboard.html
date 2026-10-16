@@ -773,26 +773,6 @@ vendored under /static/leaflet so an air-gapped deployment never reaches a CDN. 
     flex: 0 0 auto;
 }
 
-.btn-netcare-edit {
-    background: transparent;
-    border: 1px solid var(--border-color);
-    color: var(--text-muted);
-    border-radius: 4px;
-    padding: 3px 6px;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    line-height: 1;
-    transition: all 0.15s ease;
-}
-
-.btn-netcare-edit:hover {
-    background: rgba(255, 255, 255, 0.12);
-    color: var(--text-main);
-    border-color: var(--primary);
-}
-
 .netcare-toast {
     position: fixed;
     bottom: 2rem;
@@ -1317,12 +1297,19 @@ vendored under /static/leaflet so an air-gapped deployment never reaches a CDN. 
 
             <form class="netcare-range-form" id="netcare-range-form" autocomplete="off">
                 <label for="netcare-start">From:</label>
-                <input type="text" id="netcare-start" name="start" placeholder="YYYY-MM-DD HH:MM">
+                <div class="input-time-wrapper">
+                    <input type="text" id="netcare-start" name="start" placeholder="YYYY-MM-DD HH:MM" readonly>
+                    <button type="button" class="btn-open-matrix" data-target="netcare-start" title="Select Start Time" style="display: inline-flex; align-items: center; justify-content: center;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg></button>
+                </div>
                 <label for="netcare-end">To:</label>
-                <input type="text" id="netcare-end" name="end" placeholder="YYYY-MM-DD HH:MM">
+                <div class="input-time-wrapper">
+                    <input type="text" id="netcare-end" name="end" placeholder="YYYY-MM-DD HH:MM" readonly>
+                    <button type="button" class="btn-open-matrix" data-target="netcare-end" title="Select End Time" style="display: inline-flex; align-items: center; justify-content: center;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg></button>
+                </div>
                 <button type="button" id="netcare-btn-now" class="btn-now-shortcut" title="Set 'To' to current time">Now</button>
                 <button type="submit" class="btn btn-primary" style="padding: 0.35rem 0.75rem; font-size: 0.8rem;">Filter</button>
             </form>
+            <input type="text" id="netcare-fullday-hidden" style="position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none;">
 
             <div class="netcare-preset-group">
                 <span class="netcare-cached-pill" id="netcare-cached-pill" hidden
@@ -2015,7 +2002,7 @@ document.addEventListener('DOMContentLoaded', () => {
             currentTargetInput = document.getElementById(targetId);
             if (!currentTargetInput) return;
 
-            const isStart = targetId === 'start';
+            const isStart = targetId === 'start' || targetId === 'netcare-start';
             if (modalLabel) {
                 modalLabel.textContent = isStart ? 'Select Start Time (From)' : 'Select End Time (To)';
             }
@@ -2119,6 +2106,14 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (endInput) {
             endInput.addEventListener('click', () => openMatrixModal('end'));
+        }
+        const netcareStartInp = document.getElementById('netcare-start');
+        if (netcareStartInp) {
+            netcareStartInp.addEventListener('click', () => openMatrixModal('netcare-start'));
+        }
+        const netcareEndInp = document.getElementById('netcare-end');
+        if (netcareEndInp) {
+            netcareEndInp.addEventListener('click', () => openMatrixModal('netcare-end'));
         }
 
         if (applyBtn) applyBtn.addEventListener('click', applySelection);
@@ -2852,11 +2847,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
         }
 
-        function runNetcareQuery(preset, startValue, endValue) {
+        function runNetcareQuery(preset, startValue, endValue, fulldayValue) {
             const payload = { preset: preset || 'today' };
             if (preset === 'custom') {
                 payload.start = startValue;
                 payload.end = endValue;
+            } else if (preset === 'fullday') {
+                payload.fullday = fulldayValue || netcareActiveDay;
             }
             openNetcareProgress();
             fetch('/api/netcare/query', {
@@ -2895,12 +2892,34 @@ document.addEventListener('DOMContentLoaded', () => {
             netcareCachedPill.dataset.day = day;
         }
 
+        // Netcare Full-Day Flatpickr
+        const netcareFullDayHidden = document.getElementById('netcare-fullday-hidden');
+        const netcareFullDayBtn = document.querySelector('.netcare-preset[data-preset="fullday"]');
+        if (typeof flatpickr !== 'undefined' && netcareFullDayHidden && netcareFullDayBtn) {
+            const fpNetcareFullDay = flatpickr(netcareFullDayHidden, {
+                dateFormat: "Y-m-d",
+                positionElement: netcareFullDayBtn,
+                onChange: function(selectedDates, dateStr) {
+                    if (dateStr) {
+                        activateNetcarePreset('fullday');
+                        netcareActiveDay = dateStr;
+                        markNetcareCachedDay(dateStr);
+                        loadNetcare(dateStr);
+                        runNetcareQuery('fullday', null, null, dateStr);
+                    }
+                }
+            });
+            netcareFullDayBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                fpNetcareFullDay.open();
+            });
+        }
+
         netcarePresetButtons.forEach(button => {
             button.addEventListener('click', () => {
                 const preset = button.dataset.preset;
                 activateNetcarePreset(preset);
                 if (preset === 'fullday') {
-                    document.getElementById('btn-fullday-modal').click();
                     return;
                 }
                 runNetcareQuery(preset);

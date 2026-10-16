@@ -185,6 +185,7 @@ async def api_netcare_query(
         preset=str(body.get("preset") or "today"),
         start_str=_optional_str(body.get("start")),
         end_str=_optional_str(body.get("end")),
+        fullday=_optional_str(body.get("fullday")),
     )
     requested = body.get("targets")
     targets: list[str] = [str(t) for t in requested] if isinstance(requested, list) else []

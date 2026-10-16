@@ -196,10 +196,19 @@ class QuotaBurnRateTracker:
         total_quota_gb: float,
         timestamp: datetime | None = None,
     ) -> None:
-        """Append one scrape round's quota reading for a modem."""
+        """Append one scrape round's quota reading for a modem with deduplication guard."""
         with self._lock:
             now = timestamp or datetime.now(UTC)
             snapshots = self._snapshots.setdefault(imei, [])
+            if snapshots:
+                last = snapshots[-1]
+                elapsed_seconds = (now - last.timestamp).total_seconds()
+                if (
+                    last.remaining_gb == remaining_gb
+                    and last.total_quota_gb == total_quota_gb
+                    and elapsed_seconds < 60
+                ):
+                    return
             snapshots.append(
                 BurnRateSnapshot(
                     timestamp=now,
@@ -234,29 +243,42 @@ class QuotaBurnRateTracker:
     def _burn_rate_from_snapshots(
         self, snapshots: list[BurnRateSnapshot]
     ) -> tuple[float | None, int]:
-        """Average the consecutive GB/day deltas across a snapshot list.
+        """Calculate total-drop over total-elapsed time across a snapshot list.
 
-        Returns ``(rate, points_used)``.  Fewer than two snapshots, or
-        snapshots with no positive elapsed time between them, yield
-        ``None`` (not enough signal to forecast from).
+        Returns ``(rate, points_used)``. Skips top-up windows (where remaining quota
+        increased). Returns ``None`` if fewer than 2 points or elapsed time <= 0.
         """
         if len(snapshots) < 2:
             return None, len(snapshots)
-        deltas: list[float] = []
-        for older, newer in zip(snapshots[:-1], snapshots[1:], strict=True):
-            elapsed_seconds = (newer.timestamp - older.timestamp).total_seconds()
-            if elapsed_seconds <= 0:
-                continue
-            delta_gb = older.remaining_gb - newer.remaining_gb
-            if delta_gb < 0:
-                # Quota topped up between readings; that interval is not a
-                # consumption signal, so skip it rather than drag the average
-                # negative.
-                continue
-            deltas.append(delta_gb / (elapsed_seconds / 86400.0))
-        if not deltas:
+        
+        first = snapshots[0]
+        last = snapshots[-1]
+        elapsed_seconds = (last.timestamp - first.timestamp).total_seconds()
+        if elapsed_seconds <= 0:
             return None, len(snapshots)
-        rate = sum(deltas) / len(deltas)
+
+        # Check for any top-up or reset windows between first and last.
+        # Skips top-up windows; returns None if <2 points or elapsed <= 0.
+        total_drop = 0.0
+        valid_elapsed = 0.0
+        has_valid_interval = False
+
+        for older, newer in zip(snapshots[:-1], snapshots[1:], strict=True):
+            sec = (newer.timestamp - older.timestamp).total_seconds()
+            if sec <= 0:
+                continue
+            drop = older.remaining_gb - newer.remaining_gb
+            if drop < 0:
+                # Top-up window, skip this interval
+                continue
+            total_drop += drop
+            valid_elapsed += sec
+            has_valid_interval = True
+
+        if not has_valid_interval or valid_elapsed <= 0:
+            return None, len(snapshots)
+
+        rate = total_drop / (valid_elapsed / 86400.0)
         return rate, len(snapshots)
 
     def _evaluate(
