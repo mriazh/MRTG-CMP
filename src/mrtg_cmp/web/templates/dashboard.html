@@ -2481,8 +2481,13 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         netcareCards.forEach(card => {
-            card.addEventListener('click', () => openNetcareModal(card));
+            card.addEventListener('click', event => {
+                // Ignore clicks on buttons or the action group so Edit/Delete do not open the graph modal.
+                if (event.target.closest('button, .card-action-group')) return;
+                openNetcareModal(card);
+            });
             card.addEventListener('keydown', event => {
+                if (event.target.closest('button, .card-action-group')) return;
                 if (event.key === 'Enter' || event.key === ' ') {
                     event.preventDefault();
                     openNetcareModal(card);
