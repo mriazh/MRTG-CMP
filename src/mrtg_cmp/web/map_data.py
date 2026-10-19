@@ -1,23 +1,10 @@
 """Map marker construction for the dashboard's interactive Leaflet view.
 
-Phase 61. This module is deliberately free of web-framework concerns: it turns
-the two monitoring sources the dashboard already renders -- Netcare branch
-links and Telkomsel Orbit modems -- into a flat list of JSON-ready markers,
-and it owns the only interesting rule in the feature, which colour a marker
-gets.
-
-Colour precedence (FR-61.2), highest first:
-
-1. **Red / orange** for anything an operator would act on. A failed capture or
-   a link that is down is red; a stale capture or an idle modem is orange.
-2. **Blue** for a healthy link whose service type is ``Astinet`` or
-   ``Metro-E``, so the dedicated-access footprint reads differently from the
-   shared VPN-IP estate at a glance.
-3. **Green** for everything else that is healthy.
-
-Health outranks service on purpose. A degraded Astinet link is drawn orange,
-not blue, because "is it up" is the question the map is answered with before
-"what does it carry".
+Phase 66. This module is deliberately free of web-framework concerns: it turns
+the monitoring sources the dashboard already renders -- Netcare branch
+links, Telkomsel Orbit modems, and the MikroTik router -- into a flat list
+of JSON-ready markers using binary health coloring (health only, no service
+dimension).
 """
 
 from __future__ import annotations
@@ -25,29 +12,24 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from ..orbit.scraper import OrbitModemStatus
+from ..orbit.scraper import NO_PACKAGE_EXPIRY_STR, OrbitModemStatus
 
 #: Marker colours. Exported so the dashboard legend and the popup stylesheet
 #: read from the same palette rather than re-typing hex codes.
 MARKER_COLOR_OK = "#22c55e"  # green
-MARKER_COLOR_DEGRADED = "#f59e0b"  # orange
 MARKER_COLOR_DOWN = "#ef4444"  # red
-MARKER_COLOR_SERVICE = "#3b82f6"  # blue
 
 #: Legend rows, in the order the dashboard renders them.
 MAP_LEGEND: tuple[tuple[str, str], ...] = (
-    (MARKER_COLOR_OK, "OK / Active"),
-    (MARKER_COLOR_SERVICE, "Astinet / Metro-E"),
-    (MARKER_COLOR_DEGRADED, "Degraded / Idle"),
+    (MARKER_COLOR_OK, "Up / Active"),
     (MARKER_COLOR_DOWN, "Down / Error"),
 )
 
-#: Service types drawn in the service blue rather than plain green.
-SERVICE_COLOR_TYPES: frozenset[str] = frozenset({"Astinet", "Metro-E"})
-
-#: Netcare capture statuses that mean "something is wrong" (FR-61.2).
+#: Netcare capture statuses that mean "something is wrong".
 _NETCARE_DOWN_STATUSES: frozenset[str] = frozenset({"error", "down"})
-_NETCARE_DEGRADED_STATUSES: frozenset[str] = frozenset({"stale", "pending"})
+
+#: Router coordinates.
+ROUTER_COORDINATES = (-6.3375, 106.7647)
 
 #: ``(0, 0)`` is the classic spreadsheet "no coordinates" placeholder. Dropping
 #: the marker is better than planting one in the Gulf of Guinea.
@@ -80,27 +62,26 @@ def coordinate_or_none(
     return lat, lon
 
 
-def netcare_marker_color(status: str, service_type: str) -> str:
-    """Pick the marker colour for a Netcare link from status and service."""
+def netcare_marker_color(status: str) -> str:
+    """Pick the marker colour for a Netcare link from status."""
 
     key = (status or "").strip().lower()
     if key in _NETCARE_DOWN_STATUSES:
         return MARKER_COLOR_DOWN
-    if key in _NETCARE_DEGRADED_STATUSES:
-        return MARKER_COLOR_DEGRADED
-    if service_type in SERVICE_COLOR_TYPES:
-        return MARKER_COLOR_SERVICE
     return MARKER_COLOR_OK
 
 
-def orbit_marker_color(status: str) -> str:
+def orbit_marker_color(status: str, error: str = "", earliest_expiry_str: str = "") -> str:
     """Pick the marker colour for an Orbit modem.
 
-    Orbit has no service dimension, so this is purely ``ACTIVE`` vs anything
-    else; ``IDLE`` is the common non-active state and lands on orange.
+    Earliest expiry string equal to NO_PACKAGE_EXPIRY_STR OR truthy error -> DOWN;
+    otherwise OK (ACTIVE and IDLE both green).
     """
 
-    return MARKER_COLOR_OK if (status or "").strip().upper() == "ACTIVE" else MARKER_COLOR_DEGRADED
+    if error or earliest_expiry_str == NO_PACKAGE_EXPIRY_STR:
+        return MARKER_COLOR_DOWN
+    return MARKER_COLOR_OK
+
 
 
 #: Default coordinates per regional airport for targets that have not
@@ -141,7 +122,7 @@ def netcare_marker(card: Mapping[str, Any]) -> dict[str, Any] | None:
         "status": status,
         "status_label": status.upper(),
         "service_type": service_type,
-        "color": netcare_marker_color(status, service_type),
+        "color": netcare_marker_color(status),
         "latitude": lat,
         "longitude": lon,
         "detail": str(card.get("region_label", "") or service_type),
@@ -163,6 +144,11 @@ def orbit_marker(status: OrbitModemStatus) -> dict[str, Any] | None:
     lat, lon = position
 
     modem_status = modem.status or ""
+    color = orbit_marker_color(
+        modem_status,
+        error=str(status.error or ""),
+        earliest_expiry_str=str(status.earliest_expiry_str or ""),
+    )
     return {
         "id": f"orbit:{modem.no}",
         "kind": "orbit",
@@ -172,7 +158,7 @@ def orbit_marker(status: OrbitModemStatus) -> dict[str, Any] | None:
         "status": modem_status,
         "status_label": modem_status.upper() or "UNKNOWN",
         "service_type": "",
-        "color": orbit_marker_color(modem_status),
+        "color": color,
         "latitude": lat,
         "longitude": lon,
         "detail": f"Modem {modem.no}",
@@ -182,15 +168,49 @@ def orbit_marker(status: OrbitModemStatus) -> dict[str, Any] | None:
     }
 
 
+def router_marker(sample: Mapping[str, Any] | None, name: str) -> dict[str, Any]:
+    """Build the router marker (always plotted, never None)."""
+
+    status = str((sample or {}).get("status", "")).strip() or "NO DATA"
+    status_upper = status.upper()
+    color = MARKER_COLOR_OK if status_upper in {"UP", "RESET"} else MARKER_COLOR_DOWN
+    timestamp = (sample or {}).get("timestamp_wib") or (sample or {}).get("timestamp") or ""
+    if not timestamp and sample and "epoch" in sample:
+        from datetime import UTC, datetime, timedelta
+        ts_utc = datetime.fromtimestamp(sample["epoch"], tz=UTC)
+        timestamp = (ts_utc + timedelta(hours=7)).strftime("%Y-%m-%d %H:%M:%S WIB")
+
+    return {
+        "id": "router:gateway",
+        "kind": "router",
+        "name": name,
+        "identifier_label": "Interface",
+        "identifier": "WAN",
+        "status": status,
+        "status_label": status_upper,
+        "service_type": "",
+        "color": color,
+        "latitude": ROUTER_COORDINATES[0],
+        "longitude": ROUTER_COORDINATES[1],
+        "detail": "MikroTik WAN uplink",
+        "last_polled": str(timestamp or ""),
+        "card_selector": "#live-traffic-section",
+        "card_url": "/",
+    }
+
+
+def pondok_cabe_marker(sample: Mapping[str, Any] | None, name: str) -> dict[str, Any]:
+    """Alias for router_marker for backward compatibility."""
+    return router_marker(sample, name)
+
+
 def build_map_markers(
     netcare_cards: Iterable[Mapping[str, Any]],
     orbit_statuses: Iterable[OrbitModemStatus],
+    router_sample: Mapping[str, Any] | None = None,
+    router_name: str = "MRTG Router",
 ) -> list[dict[str, Any]]:
-    """Return every located Netcare link and Orbit modem as a map marker.
-
-    Netcare comes first so the map opens on the branch-link estate, which is
-    the larger and higher-priority footprint.
-    """
+    """Return every located Netcare link, Orbit modem, and the router as map markers."""
 
     markers: list[dict[str, Any]] = []
     for card in netcare_cards:
@@ -201,4 +221,5 @@ def build_map_markers(
         marker = orbit_marker(status)
         if marker is not None:
             markers.append(marker)
+    markers.append(router_marker(router_sample, router_name))
     return markers

@@ -111,7 +111,7 @@ def dashboard_view(
             "display_start": display_st,
             "display_end": display_et,
             **netcare_context,
-            **_map_context(netcare_context["netcare_cards"]),
+            **_map_context(netcare_context["netcare_cards"], router_sample=latest),
         },
     )
 
@@ -120,15 +120,17 @@ def dashboard_view(
 def api_map_points(
     netcare_day: str | None = Query(None),
     current_user: dict[str, Any] = Depends(require_authenticated_user),
+    db: Database = Depends(get_db),
 ) -> Response:
-    """Return every located Netcare link and Orbit modem for the Leaflet map.
+    """Return every located Netcare link, Orbit modem, and router for the Leaflet map.
 
     The dashboard seeds its map from the server-rendered payload, so this exists
     for the auto-refresh cycle: the browser re-pulls markers on the same cadence
     as the card grids and repaints in place instead of reloading the page.
     """
 
-    markers = _map_markers(_netcare_context(netcare_day)["netcare_cards"])
+    latest = db.get_latest_sample()
+    markers = _map_markers(_netcare_context(netcare_day)["netcare_cards"], router_sample=latest)
     return JSONResponse({"markers": markers, "count": len(markers)})
 
 

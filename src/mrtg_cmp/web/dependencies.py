@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import threading
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -402,16 +402,26 @@ def _map_orbit_statuses() -> list[OrbitModemStatus]:
 
 def _map_markers(
     netcare_cards: Sequence[dict[str, Any]] | None = None,
+    router_sample: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Build the dashboard map markers from Netcare links and Orbit modems."""
+    """Build the dashboard map markers from Netcare links, Orbit modems, and the router."""
 
-    return build_map_markers(netcare_cards or [], _map_orbit_statuses())
+    router_name = f"MRTG {settings.location_name}"
+    return build_map_markers(
+        netcare_cards or [],
+        _map_orbit_statuses(),
+        router_sample=router_sample,
+        router_name=router_name,
+    )
 
 
-def _map_context(netcare_cards: Sequence[dict[str, Any]]) -> dict[str, Any]:
+def _map_context(
+    netcare_cards: Sequence[dict[str, Any]],
+    router_sample: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Build the dashboard context for the interactive Leaflet map section."""
 
-    markers = _map_markers(netcare_cards)
+    markers = _map_markers(netcare_cards, router_sample=router_sample)
     return {
         "map_markers": markers,
         "map_marker_count": len(markers),

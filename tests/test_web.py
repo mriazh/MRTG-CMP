@@ -2703,7 +2703,7 @@ def test_map_marker_payload_carries_coordinates_and_status(
         assert str(marker["color"]).startswith("#")
         assert marker["name"]
         # Popup fields (FR-48.2) ride along in the payload, not a second fetch.
-        assert marker["identifier_label"] in ("SID", "IMEI")
+        assert marker["identifier_label"] in ("SID", "IMEI", "Interface")
         assert marker["identifier"]
         assert marker["status_label"]
         assert "last_polled" in marker
@@ -2754,29 +2754,27 @@ def test_map_points_endpoint_requires_authentication(client_with_db: TestClient)
 def test_map_shows_an_empty_state_when_no_target_has_coordinates(
     client_with_db: TestClient,
 ) -> None:
-    """The built-in catalogs carry no coordinates, so say so instead of rendering grey."""
+    """The router marker is always plotted, so map is never empty."""
 
     login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
     resp = client_with_db.get("/", cookies=login_resp.cookies)
 
     assert resp.status_code == 200
     assert 'id="map-card"' in resp.text
-    assert 'id="map-empty"' in resp.text
-    # A Leaflet container with nothing in it would just be a grey rectangle.
-    assert 'id="map"' not in resp.text
-    assert _map_payload(resp.text) == []
+    assert 'id="map"' in resp.text
+    assert len(_map_payload(resp.text)) >= 1
 
 
 def test_map_empty_state_still_refreshes_without_markers(
     client_with_db: TestClient,
 ) -> None:
-    """A zero-marker refresh is a valid answer, not a 404."""
+    """A map refresh returns the router marker."""
 
     login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
     resp = client_with_db.get("/api/map/points", cookies=login_resp.cookies)
 
     assert resp.status_code == 200
-    assert resp.json() == {"markers": [], "count": 0}
+    assert resp.json()["count"] >= 1
 
 
 # -- map_data unit tests -----------------------------------------------------
@@ -2799,36 +2797,85 @@ def test_coordinate_rejects_unusable_values() -> None:
 
 
 def test_marker_colour_precedence_puts_health_before_service() -> None:
-    """FR-61.2: a degraded Astinet link is orange, not blue."""
+    """Phase 66.1: Netcare marker colour is binary (health only)."""
 
     from mrtg_cmp.web.map_data import (
-        MARKER_COLOR_DEGRADED,
         MARKER_COLOR_DOWN,
         MARKER_COLOR_OK,
-        MARKER_COLOR_SERVICE,
         netcare_marker_color,
     )
 
-    assert netcare_marker_color("ok", "VPN IP") == MARKER_COLOR_OK
-    assert netcare_marker_color("ok", "Astinet") == MARKER_COLOR_SERVICE
-    assert netcare_marker_color("ok", "Metro-E") == MARKER_COLOR_SERVICE
-    assert netcare_marker_color("stale", "Astinet") == MARKER_COLOR_DEGRADED
-    assert netcare_marker_color("pending", "Metro-E") == MARKER_COLOR_DEGRADED
-    assert netcare_marker_color("error", "Astinet") == MARKER_COLOR_DOWN
-    assert netcare_marker_color("down", "VPN IP") == MARKER_COLOR_DOWN
+    assert netcare_marker_color("ok") == MARKER_COLOR_OK
+    assert netcare_marker_color("stale") == MARKER_COLOR_OK
+    assert netcare_marker_color("pending") == MARKER_COLOR_OK
+    assert netcare_marker_color("error") == MARKER_COLOR_DOWN
+    assert netcare_marker_color("down") == MARKER_COLOR_DOWN
 
 
-def test_orbit_marker_colour_is_active_versus_everything_else() -> None:
+def test_orbit_marker_colour_rules() -> None:
+    """Phase 66.1: IDLE green, ACTIVE green, no-package expiry red, error red."""
+
+    from mrtg_cmp.orbit.scraper import NO_PACKAGE_EXPIRY_STR
     from mrtg_cmp.web.map_data import (
-        MARKER_COLOR_DEGRADED,
+        MARKER_COLOR_DOWN,
         MARKER_COLOR_OK,
         orbit_marker_color,
     )
 
     assert orbit_marker_color("ACTIVE") == MARKER_COLOR_OK
-    assert orbit_marker_color("active") == MARKER_COLOR_OK
-    assert orbit_marker_color("IDLE") == MARKER_COLOR_DEGRADED
-    assert orbit_marker_color("") == MARKER_COLOR_DEGRADED
+    assert orbit_marker_color("IDLE") == MARKER_COLOR_OK
+    assert (
+        orbit_marker_color("ACTIVE", earliest_expiry_str=NO_PACKAGE_EXPIRY_STR)
+        == MARKER_COLOR_DOWN
+    )
+    assert orbit_marker_color("IDLE", error="Timeout") == MARKER_COLOR_DOWN
+
+
+def test_router_marker_behaviour() -> None:
+    """Phase 66.2: Router marker coordinates, name passthrough, and status."""
+
+    from mrtg_cmp.web.map_data import (
+        MARKER_COLOR_DOWN,
+        MARKER_COLOR_OK,
+        ROUTER_COORDINATES,
+        router_marker,
+    )
+
+    m_up = router_marker(
+        {"status": "UP", "timestamp": "2026-10-19 12:00:00"}, "MRTG Gateway"
+    )
+    assert m_up["id"] == "router:gateway"
+    assert m_up["kind"] == "router"
+    assert m_up["name"] == "MRTG Gateway"
+    assert m_up["identifier_label"] == "Interface"
+    assert m_up["identifier"] == "WAN"
+    assert m_up["color"] == MARKER_COLOR_OK
+    assert m_up["latitude"] == ROUTER_COORDINATES[0]
+    assert m_up["longitude"] == ROUTER_COORDINATES[1]
+    assert m_up["card_url"] == "/"
+
+    m_reset = router_marker({"status": "RESET"}, "MRTG Gateway")
+    assert m_reset["color"] == MARKER_COLOR_OK
+
+    m_down = router_marker({"status": "DOWN"}, "MRTG Gateway")
+    assert m_down["color"] == MARKER_COLOR_DOWN
+
+    m_none = router_marker(None, "MRTG Gateway")
+    assert m_none["color"] == MARKER_COLOR_DOWN
+    assert m_none["status_label"] == "NO DATA"
+
+
+def test_legend_contract() -> None:
+    """Phase 66.1: MAP_LEGEND has exactly 2 entries with pinned hex values."""
+
+    from mrtg_cmp.web.map_data import MAP_LEGEND, MARKER_COLOR_DOWN, MARKER_COLOR_OK
+
+    assert len(MAP_LEGEND) == 2
+    assert MAP_LEGEND[0] == (MARKER_COLOR_OK, "Up / Active")
+    assert MAP_LEGEND[1] == (MARKER_COLOR_DOWN, "Down / Error")
+    assert MARKER_COLOR_OK == "#22c55e"
+    assert MARKER_COLOR_DOWN == "#ef4444"
+
 
 
 def test_marker_builders_skip_targets_without_coordinates() -> None:
