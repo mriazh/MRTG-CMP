@@ -164,9 +164,9 @@ def test_web_unit_runs_the_web_command() -> None:
 
 
 def test_web_unit_sets_matplotlib_config_dir() -> None:
-    """Under ProtectHome=read-only, Matplotlib needs a writable cache dir in /tmp."""
+    """Under ProtectHome=read-only, Matplotlib needs a writable cache dir in /run."""
     text = _unit("mrtg-cmp-web.service").read_text(encoding="utf-8")
-    assert "Environment=MPLCONFIGDIR=/tmp/matplotlib" in text
+    assert "Environment=MPLCONFIGDIR=/run/mrtg-cmp-web/matplotlib" in text
 
 
 def test_collector_unit_sets_matplotlib_config_dir() -> None:

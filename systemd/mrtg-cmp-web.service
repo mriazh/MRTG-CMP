@@ -11,11 +11,13 @@ UMask=0077
 WorkingDirectory=@APP_DIR@
 EnvironmentFile=-@APP_DIR@/config/.env
 EnvironmentFile=-@APP_DIR@/.env
-Environment=MPLCONFIGDIR=/tmp/matplotlib
-Environment=SE_CACHE_PATH=/tmp/selenium
+RuntimeDirectory=mrtg-cmp-web
+RuntimeDirectoryMode=0700
 Environment=HOME=@APP_DIR@
 Environment=TMPDIR=/run/mrtg-cmp-web
-RuntimeDirectory=mrtg-cmp-web
+Environment=SE_CACHE_PATH=/run/mrtg-cmp-web/selenium
+Environment=MPLCONFIGDIR=/run/mrtg-cmp-web/matplotlib
+ExecStartPre=/usr/bin/mkdir -p /run/mrtg-cmp-web/selenium /run/mrtg-cmp-web/matplotlib
 ExecStart=@APP_DIR@/.venv/bin/python -m mrtg_cmp web --host 0.0.0.0 --port 8000
 Restart=always
 RestartSec=5s
@@ -23,7 +25,7 @@ RestartSec=5s
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=@APP_DIR@/data @APP_DIR@ /tmp/selenium /run/mrtg-cmp-web
+ReadWritePaths=@APP_DIR@/data @APP_DIR@ /run/mrtg-cmp-web
 
 [Install]
 WantedBy=multi-user.target
