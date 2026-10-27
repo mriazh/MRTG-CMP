@@ -172,7 +172,7 @@ def test_web_unit_sets_matplotlib_config_dir() -> None:
 def test_collector_unit_sets_matplotlib_config_dir() -> None:
     """Collector imports mrtg_cmp which loads graph_renderer, requiring writable MPL cache."""
     text = _unit("mrtg-cmp-collector.service").read_text(encoding="utf-8")
-    assert "Environment=MPLCONFIGDIR=/tmp/matplotlib" in text
+    assert "Environment=MPLCONFIGDIR=/run/mrtg-cmp-collector/matplotlib" in text
 
 
 def test_netcare_unit_runs_the_netcare_command() -> None:
