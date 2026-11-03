@@ -42,7 +42,7 @@ ROTATE_STATUS = frozenset({429, 500, 502, 503, 504})
 #: Status codes that mean the model itself is gone rather than momentarily
 #: unavailable. No API key can rescue it, so the model is blacklisted for the
 #: rest of the session and later solves skip it without paying a timeout.
-MODEL_BLACKLIST_STATUS = frozenset({404, 503})
+MODEL_BLACKLIST_STATUS = frozenset({404})
 
 #: Per-request timeout. Deliberately short: the CAPTCHA is 3 characters the
 #: portal will re-issue anyway, so waiting a long time for one model is worse
@@ -174,9 +174,13 @@ class GeminiCaptchaSolver:
 
     @property
     def blacklisted_models(self) -> frozenset[str]:
-        """Models removed from this session's rotation by 404/503 responses."""
+        """Models removed from this session's rotation by 404 responses."""
 
         return frozenset(self._blacklisted_models)
+
+    def clear_blacklist(self) -> None:
+        """Reset blacklisted models for a fresh session or round."""
+        self._blacklisted_models.clear()
 
     @property
     def next_key_index(self) -> int:

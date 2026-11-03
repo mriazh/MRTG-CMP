@@ -704,7 +704,10 @@ class OrbitScraper:
                 error=None,
             )
         except Exception as exc:
-            logger.warning("Scrape error on modem %s (%s): %s", target.no, target.phone, exc)
+            current_url = getattr(driver, "current_url", "unknown") if driver else "unknown"
+            exc_type = type(exc).__name__
+            exc_msg = f"{exc_type} at {current_url}: {exc}".strip()
+            logger.warning("Scrape error on modem %s (%s): %s", target.no, target.phone, exc_msg)
             return OrbitModemStatus(
                 target=target,
                 total_remaining_gb=0.0,
@@ -714,7 +717,7 @@ class OrbitScraper:
                 earliest_expiry_str=None,
                 earliest_days_left=None,
                 last_scraped_at=now_str,
-                error=str(exc),
+                error=exc_msg,
             )
 
     @staticmethod

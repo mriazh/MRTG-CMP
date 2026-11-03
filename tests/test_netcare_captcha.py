@@ -226,11 +226,10 @@ def test_a_nonsense_timeout_degrades_to_one_second() -> None:
     assert solver.timeout_seconds == 1
 
 
-@pytest.mark.parametrize("status", [404, 503])
-def test_a_503_or_404_model_is_blacklisted_for_the_session(status: int) -> None:
+def test_a_404_model_is_blacklisted_for_the_session() -> None:
     """An unavailable model is dropped outright: no key is even attempted."""
 
-    transport = RecordingTransport([(status, {}), _text_response("m3q")])
+    transport = RecordingTransport([(404, {}), _text_response("m3q")])
     solver = _solver(transport, ["key-1", "key-2"], ["gemini-2.5-flash", "gemini-3.6-flash"])
 
     assert solver.solve(PNG_BYTES) == "m3q"
@@ -238,15 +237,25 @@ def test_a_503_or_404_model_is_blacklisted_for_the_session(status: int) -> None:
     assert len(transport.calls) == 2
     assert "gemini-2.5-flash" in transport.calls[0][0]
     assert "key-2" not in transport.calls[0][0]
-    assert status in (404, 503)
     assert "gemini-2.5-flash" in solver.blacklisted_models
+
+
+def test_a_503_server_error_rotates_without_blacklisting() -> None:
+    """503 rotates to next key/model, and solver.blacklisted_models == frozenset()."""
+
+    transport = RecordingTransport([(503, {}), _text_response("f6y")])
+    solver = _solver(transport, ["key-1", "key-2"], ["gemini-2.5-flash"])
+
+    assert solver.solve(PNG_BYTES) == "f6y"
+    assert "key-2" in transport.calls[1][0]
+    assert solver.blacklisted_models == frozenset()
 
 
 def test_a_blacklisted_model_is_skipped_on_the_next_solve() -> None:
     """The point of the breaker: the second CAPTCHA never touches the dead model."""
 
     transport = RecordingTransport(
-        [(503, {}), _text_response("abc"), _text_response("xyz")]
+        [(404, {}), _text_response("abc"), _text_response("xyz")]
     )
     solver = _solver(transport, ["key-1"], ["gemini-2.5-flash", "gemini-3.6-flash"])
 
@@ -271,7 +280,7 @@ def test_a_quota_error_does_not_blacklist_the_model() -> None:
 def test_solving_returns_immediately_when_every_model_is_blacklisted() -> None:
     """No transport call at all: there is nothing left worth trying."""
 
-    transport = RecordingTransport([(503, {}), (404, {})])
+    transport = RecordingTransport([(404, {}), (404, {})])
     solver = _solver(transport, ["key-1"], ["gemini-2.5-flash", "gemini-2.0-flash"])
 
     assert solver.solve(PNG_BYTES) == ""

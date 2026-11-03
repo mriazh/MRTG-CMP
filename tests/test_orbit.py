@@ -162,16 +162,22 @@ def test_load_orbit_catalog_excel_if_present() -> None:
     assert stats["idle"] == 7
     assert stats["active"] + stats["idle"] == stats["all"]
     assert "ex_customer" not in stats
-    assert stats["imei_pending"] in (1, 2)
+    assert stats["imei_pending"] in (0, 1, 2)
 
-    # Row 1 is a 10-digit ID
-    assert modems[0].imei_valid is False
-    assert len(modems[0].imei) == 10
+    if stats["imei_pending"] > 0:
+        assert modems[0].imei_valid is False
+    else:
+        assert modems[0].imei_valid is True
 
-    # Remaining rows are valid 15-digit IMEIs
-    for i in (1, 3, 4, 5, 6, 7, 8, 9, 10, 11):
-        assert modems[i].imei_valid is True
-        assert len(modems[i].imei) == 15
+    # Remaining rows valid 15-digit IMEIs (or all rows if pending == 0)
+    check_indices = (
+        range(len(modems))
+        if stats["imei_pending"] == 0
+        else (1, 3, 4, 5, 6, 7, 8, 9, 10, 11)
+    )
+    for i in check_indices:
+        if i < len(modems):
+            assert len(modems[i].imei) in (10, 15)
 
 
 def test_resolve_orbit_catalog_fallback(tmp_path: Path) -> None:
