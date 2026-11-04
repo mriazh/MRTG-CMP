@@ -11,8 +11,8 @@ Production runs as four systemd daemons: `mrtg-cmp-web` (FastAPI modular router)
 - **Point-and-Click Time Ranges**: presets (1/3/6/12/24 Hours, Today, Yesterday, 7 Days, This Month), a day picker, a custom From/To selector, and a Now shortcut.
 - **RouterOS Web Console**: browser terminal with live RouterOS passthrough auth, command history, and a SQLite audit trail; auto-lock kills the session on tab close.
 - **TelkomCare Scraper**: headless-Chrome capture of 18 branch MRTG graphs with Gemini CAPTCHA failover, TOTP auto-login, and a parallel worker pool.
-- **Telkomsel Orbit Scraper**: 12-modem quota monitoring with burn-rate forecasting, days-to-exhaustion, and predictive WhatsApp alerts.
-- **Interactive Leaflet Map**: top-of-dashboard CartoDB Dark Matter map plotting Netcare branches and Orbit modems with valid coordinates (30 target coordinates across both catalogs), with a Show/Hide toggle.
+- **Telkomsel Orbit Scraper**: 12-modem quota monitoring with earliest expiry tracking and predictive WhatsApp alerts.
+- **Interactive Leaflet map**: CartoDB Dark Matter map plotting 31 targets (18 Netcare branch links, 12 Orbit modems, and the MikroTik router) using a clean binary health palette: Up / Active (green) vs Down / Error (red).
 - **NOC Summary Strip**: Fresh/Stale/Down counters for the 18 Netcare links, updated on each scrape round.
 - **Hardened Auth**: SHA-256 session-token hashing, session revocation on logout and password change, admin/viewer RBAC, and open-redirect validation.
 - **Zero External Database**: embedded SQLite (WAL) — portable across Windows 11 and Debian 13.
@@ -190,6 +190,8 @@ The Netcare and Orbit units both need Chrome (or Chromium) for headless scraping
 sudo apt install -y chromium
 ```
 
+Systemd units use `/run/*` runtime directories (e.g. `/run/mrtg-cmp-web`, `/run/mrtg-cmp-collector`, `/run/mrtg-cmp-orbit`) with `RuntimeDirectoryMode=0700` and `ExecStartPre` to ensure 100% reboot resilience without dependency on `/tmp`.
+
 ### 4. Network Access
 The dashboard is not exposed to the open internet. Remote access goes through the
 Cloudflare Zero Trust tunnel (Argo) registered for the server's port 8000; office LAN and
@@ -224,8 +226,7 @@ dashboard as the live MikroTik telemetry.
 2. **CAPTCHA failover** — the 3-character login CAPTCHA is solved through the Gemini Vision
    API. `GEMINI_API_KEYS` rotates to the next key on HTTP 429, and `GEMINI_MODELS` falls back
    through the configured model list. Failover is bounded: each request times out after at
-   most 6s, and a model answering HTTP 404 or 503 is unavailable rather than busy, so it is
-   blacklisted for the rest of the session and skipped instantly on later CAPTCHAs.
+   most 6s; an HTTP 404 response means the model is missing and is blacklisted for the session, whereas HTTP 503 is temporary Google AI Studio overload and rotates to the next key/model without permanently blacklisting the model.
 3. **MFA** — a 6-digit code is generated from `TOTP_SECRET` with `pyotp`, so login is fully
    unattended.
 4. **Capture** — each target is filtered to the requested range (today's window by
@@ -318,9 +319,7 @@ flat and always re-captures, because it is the "latest" view.
 Scrapes the live MyOrbit portal (`myorbit.id`) for the 12 modems in
 `config/orbit_targets.csv` (or a private Excel catalog), and persists per-modem
 quota, expiry, and status to `data/orbit_cache/modems.json`. The dashboard `/orbit` page renders each modem
-with a quota bar, "days to empty" forecast, and a predictive WhatsApp alert
-(`burn_rate.py`) when the remaining balance will be exhausted before the next
-renewal window.
+with room location, SSID, quota progress bar, and earliest expiry badge (burn-rate row removed from UI; backend snapshot tracking preserved), along with predictive WhatsApp alerts when balance exhausts before renewal.
 
 ### How It Works
 1. **Catalog** — `config/orbit_targets.csv` (or private Excel catalog) lists
@@ -342,9 +341,7 @@ renewal window.
 - **Orbit page** (`/orbit`): 12 modem cards sorted by lowest-quota-first by
   default; manual "Refresh All" triggers an immediate live scrape in the
   background, with a non-blocking progress dialog.
-- **Interactive Leaflet map**: modems with valid coordinates (all 12, plus
-  regional fallbacks from `map_data.py` for any blank row) are plotted
-  alongside the 18 Netcare branch pins on the top-of-dashboard map.
+- **Interactive Leaflet map**: CartoDB Dark Matter map plotting 31 targets across the 18 Netcare links, 12 Orbit modems, and the MikroTik router with binary health status (Up/Active green vs Down/Error red).
 - **Auto-refresh**: the `/orbit` page reloads from the server cache every
   300s with a visible countdown.
 
