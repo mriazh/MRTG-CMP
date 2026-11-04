@@ -199,9 +199,6 @@ def router_marker(sample: Mapping[str, Any] | None, name: str) -> dict[str, Any]
     }
 
 
-def pondok_cabe_marker(sample: Mapping[str, Any] | None, name: str) -> dict[str, Any]:
-    """Alias for router_marker for backward compatibility."""
-    return router_marker(sample, name)
 
 
 def build_map_markers(
