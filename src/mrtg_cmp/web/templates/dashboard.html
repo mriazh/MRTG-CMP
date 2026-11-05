@@ -2852,7 +2852,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
             })
-                .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+                .then(r => {
+                    if (r.status === 401) {
+                        finishNetcareProgress('failed', 'Session expired. Redirecting to login...');
+                        window.location.href = '/login?next=' + encodeURIComponent(window.location.pathname + window.location.search);
+                        return Promise.reject(new Error('Session expired'));
+                    }
+                    return r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`));
+                })
                 .then(data => {
                     netcareJobId = data.job_id;
                     setNetcareStage(data.stage);

@@ -11,6 +11,23 @@
             document.documentElement.setAttribute('data-theme', savedTheme);
         })();
     </script>
+    <script>
+        (function() {
+            const originalFetch = window.fetch;
+            window.fetch = async function(...args) {
+                const response = await originalFetch.apply(this, args);
+                if (response.status === 401) {
+                    const firstArg = args[0];
+                    const urlStr = typeof firstArg === 'string' ? firstArg : (firstArg && firstArg.url) || '';
+                    if (!window.location.pathname.startsWith('/login') && !urlStr.includes('/api/console/auth')) {
+                        const target = window.location.pathname + window.location.search;
+                        window.location.href = '/login?next=' + encodeURIComponent(target);
+                    }
+                }
+                return response;
+            };
+        })();
+    </script>
     <style>
         :root {
             --primary: #1F497D;

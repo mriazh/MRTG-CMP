@@ -36,6 +36,22 @@ def test_login_page_renders(client_with_db: TestClient) -> None:
     assert 'href="/logs"' not in resp.text
     assert '<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">' in resp.text
 
+
+def test_login_page_defaults_remember_me_to_checked(client_with_db: TestClient) -> None:
+    """FR-58.2: the remember_me checkbox defaults to checked (30-day session)."""
+    resp = client_with_db.get("/login")
+    assert resp.status_code == 200
+    assert 'name="remember_me" value="true" checked' in resp.text
+
+
+def test_base_template_renders_global_401_fetch_interceptor(client_with_db: TestClient) -> None:
+    """FR-58.1: the base template installs a global fetch 401 interceptor redirecting to login."""
+    login_resp = client_with_db.post("/login", data={"username": "admin", "password": "admin123"})
+    resp = client_with_db.get("/", cookies=login_resp.cookies)
+    assert resp.status_code == 200
+    assert "response.status === 401" in resp.text
+    assert "/login?next=" in resp.text
+
 def test_dashboard_unauthenticated_redirects(client_with_db: TestClient) -> None:
     """Unauthenticated browser request to / redirects to /login."""
     resp = client_with_db.get("/", headers={"Accept": "text/html"})
