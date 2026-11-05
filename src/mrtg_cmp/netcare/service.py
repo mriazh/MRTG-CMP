@@ -1363,14 +1363,18 @@ def build_daemon_from_settings(config: Settings | None = None) -> NetcareDaemon:
     )
 
     def run_round() -> list[ScrapeOutcome]:
-        today = datetime.now()
+        now = datetime.now()
+        start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        round_window = (start_of_day, now)
         priority = set(service.drain_priority())
         active = active_targets(service.targets)
         ordered = [t for t in active if t.target in priority]
         ordered += [t for t in active if t.target not in priority]
 
         def capturer_for(worker: int) -> TargetCapturer:
-            return _per_target_capture(pool.get(worker), cfg.netcare_base_url, today)
+            return _per_target_capture(
+                pool.get(worker), cfg.netcare_base_url, window=round_window
+            )
 
         return scrape_round(
             service.cache,

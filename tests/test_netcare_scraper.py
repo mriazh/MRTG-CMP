@@ -185,7 +185,16 @@ def test_validate_image_file_rejects_undersized_file(tmp_path: Path) -> None:
 
 def test_format_date_filter_covers_current_day() -> None:
     day = datetime(2026, 9, 18)
-    assert format_date_filter(day) == ("18/09/2026 00:00", "18/09/2026 23:55")
+    assert format_date_filter(day, now=datetime(2026, 11, 5, 9, 0)) == (
+        "18/09/2026 00:00",
+        "18/09/2026 23:55",
+    )
+
+
+def test_format_date_filter_for_today_clamps_to_current_time() -> None:
+    assert format_date_filter(
+        datetime(2026, 9, 18, 0, 0), now=datetime(2026, 9, 18, 10, 10)
+    ) == ("18/09/2026 00:00", "18/09/2026 10:10")
 
 
 # --- URL construction ------------------------------------------------------

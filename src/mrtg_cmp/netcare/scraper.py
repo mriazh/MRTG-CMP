@@ -152,11 +152,21 @@ def build_graph_url(target: NetcareTarget, base_url: str) -> str:
     return f"{root}{path}"
 
 
-def format_date_filter(day: datetime) -> tuple[str, str]:
-    """Return the portal date-range filter strings covering the whole of ``day``."""
+def format_date_filter(day: datetime, now: datetime | None = None) -> tuple[str, str]:
+    """Return the portal date-range filter strings covering ``day``.
 
+    If ``day`` is today (or matches ``now.date()``), the window covers from 00:00 up
+    to the current capture time (``now`` or ``datetime.now()``), so all branch graphs
+    share an identical up-to-the-minute x-axis without trailing empty space.
+    If ``day`` is a past calendar date, the window covers the full 24 hours (00:00 to 23:55).
+    """
+
+    current = now or datetime.now()
     start = day.replace(hour=0, minute=0, second=0, microsecond=0)
-    end = day.replace(hour=23, minute=55, second=0, microsecond=0)
+    if day.date() == current.date():
+        end = min(day.replace(hour=23, minute=55, second=0, microsecond=0), current)
+    else:
+        end = day.replace(hour=23, minute=55, second=0, microsecond=0)
     return format_date_range(start, end)
 
 
