@@ -621,3 +621,46 @@ def test_detecting_portal_500_propagates_through_auto_login(tmp_path: Path) -> N
         session.auto_login()
     assert session.portal_unavailable is True
     assert session.last_portal_error == "portal_unavailable"
+
+
+def test_start_removes_stale_singleton_lockfiles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FR-61.1: NetcareSession.start() clears stale Singleton* locks before launching Chrome."""
+    profile_dir = tmp_path / "chrome_profile"
+    profile_dir.mkdir(parents=True, exist_ok=True)
+
+    lock_file = profile_dir / "SingletonLock"
+    cookie_file = profile_dir / "SingletonCookie"
+    socket_file = profile_dir / "SingletonSocket"
+
+    # Create dummy stale lock files/symlinks
+    try:
+        lock_file.symlink_to(Path("dead-host-1234"))
+    except (OSError, NotImplementedError):
+        lock_file.write_text("dummy-lock")
+    cookie_file.write_text("dummy-cookie")
+    socket_file.write_text("dummy-socket")
+
+    # Mock webdriver.Chrome so start() doesn't actually launch a real browser
+    fake_driver = FakeDriver(_login_page_elements())
+    from selenium import webdriver
+
+    monkeypatch.setattr(webdriver, "Chrome", lambda *args, **kwargs: fake_driver)
+
+    session = NetcareSession(
+        profile_dir=profile_dir,
+        cookie_path=tmp_path / COOKIE_FILE_NAME,
+        username="user1",
+        password="secret1",
+        totp_secret=TEST_TOTP_SECRET,
+        captcha_solver=_StaticCaptchaSolver("aBc"),
+    )
+
+    started = session.start()
+    assert started is True
+    assert not lock_file.exists()
+    assert not lock_file.is_symlink()
+    assert not cookie_file.exists()
+    assert not socket_file.exists()
+

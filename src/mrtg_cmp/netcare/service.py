@@ -1392,12 +1392,13 @@ def build_daemon_from_settings(config: Settings | None = None) -> NetcareDaemon:
             return []
         is_logged_in = getattr(lead_session, "is_logged_in", None)
         logged_in = is_logged_in() if callable(is_logged_in) else True
-        portal_down = getattr(lead_session, "portal_unavailable", False) or "500" in getattr(
-            lead_session, "last_error", ""
-        )
-        if not logged_in and not lead_session.login() and portal_down:
-            logger.warning(PORTAL_DOWN_MESSAGE)
-            return []
+        if not logged_in:
+            login_ok = lead_session.login()
+            last_err = str(getattr(lead_session, "last_error", "") or "")
+            portal_down = getattr(lead_session, "portal_unavailable", False) or "500" in last_err
+            if not login_ok and portal_down:
+                logger.warning(PORTAL_DOWN_MESSAGE)
+                return []
 
         now = datetime.now()
         start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)

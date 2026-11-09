@@ -220,6 +220,13 @@ class NetcareSession:
         profile_dir = self.profile_dir
         if profile_dir is not None:
             profile_dir.mkdir(parents=True, exist_ok=True)
+            for lock_name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+                lock_file = profile_dir / lock_name
+                try:
+                    if lock_file.is_symlink() or lock_file.exists():
+                        lock_file.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
         options = ChromeOptions()
         if self.headless:
