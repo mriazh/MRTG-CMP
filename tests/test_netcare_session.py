@@ -17,6 +17,7 @@ from mrtg_cmp.netcare.session import (
     DEFAULT_CACHE_DIR,
     OTP_INPUT_SELECTOR,
     NetcareSession,
+    TelkomCarePortalUnavailableError,
     generate_totp_code,
     is_authenticated_url,
     load_cookie_file,
@@ -555,3 +556,68 @@ def test_auto_login_gives_up_when_the_login_form_never_appears(
 
     assert session.auto_login() is False
     assert elements["#uname"][0].value == ""
+
+
+# --- Portal outage detection ---------------------------------------------------
+
+
+def test_detecting_portal_500_raises_portal_unavailable(tmp_path: Path) -> None:
+    """An HTTP 500 / maintenance page with no login inputs raises immediately."""
+
+    driver = FakeDriver(_login_page_elements())
+    driver.page_source = "<html>Sorry, we have a problem</html>"
+    session = NetcareSession(
+        driver=driver,
+        cookie_path=tmp_path / COOKIE_FILE_NAME,
+        username="user1",
+        password="secret1",
+        totp_secret=TEST_TOTP_SECRET,
+        captcha_solver=_StaticCaptchaSolver("aBc"),
+    )
+
+    assert session.portal_unavailable is False
+    with pytest.raises(TelkomCarePortalUnavailableError):
+        session._run_login_attempt()
+    assert session.portal_unavailable is True
+    assert session.last_portal_error == "portal_unavailable"
+    assert session.last_error == "TelkomCare portal returned HTTP 500 / maintenance page"
+
+
+def test_detecting_portal_500_in_body_raises_portal_unavailable(tmp_path: Path) -> None:
+    """A bare "500" marker in the page body is treated the same way."""
+
+    driver = FakeDriver(_login_page_elements())
+    driver.page_source = "<html>HTTP 500 - Internal Server Error</html>"
+    session = NetcareSession(
+        driver=driver,
+        cookie_path=tmp_path / COOKIE_FILE_NAME,
+        username="user1",
+        password="secret1",
+        totp_secret=TEST_TOTP_SECRET,
+        captcha_solver=_StaticCaptchaSolver("aBc"),
+    )
+
+    with pytest.raises(TelkomCarePortalUnavailableError):
+        session._run_login_attempt()
+    assert session.portal_unavailable is True
+
+
+def test_detecting_portal_500_propagates_through_auto_login(tmp_path: Path) -> None:
+    """auto_login lets the portal-unavailable error propagate instead of retrying."""
+
+    driver = FakeDriver(_login_page_elements())
+    driver.page_source = "<html>500</html>"
+    session = NetcareSession(
+        driver=driver,
+        cookie_path=tmp_path / COOKIE_FILE_NAME,
+        username="user1",
+        password="secret1",
+        totp_secret=TEST_TOTP_SECRET,
+        captcha_solver=_StaticCaptchaSolver("aBc"),
+        login_attempts=3,
+    )
+
+    with pytest.raises(TelkomCarePortalUnavailableError):
+        session.auto_login()
+    assert session.portal_unavailable is True
+    assert session.last_portal_error == "portal_unavailable"

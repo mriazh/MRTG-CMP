@@ -413,6 +413,83 @@ def send_scrape_failure_alert(
     return True
 
 
+def format_portal_outage_alert(
+    service: str,
+    reason: str = "HTTP 500 / Maintenance",
+    timestamp: str | None = None,
+) -> str:
+    """Compose the single latched notice that the TelkomCare portal is down."""
+
+    ts = timestamp or _now_wib_str()
+    return (
+        "⚠️ *[PORTAL NOTICE]*\n"
+        f"📡 *Service:* {service}\n"
+        f"⏱ *Time:* {ts} WIB\n"
+        f"⚠️ *Status:* Portal is currently unavailable ({reason})\n"
+        "ℹ️ *Action:* Scraper is paused and will automatically resume once the portal recovers."
+    )
+
+
+def format_portal_resolved_alert(
+    service: str,
+    timestamp: str | None = None,
+) -> str:
+    """Compose the single notice that the TelkomCare portal is back online."""
+
+    ts = timestamp or _now_wib_str()
+    return (
+        "✅ *[PORTAL RESOLVED]*\n"
+        f"📡 *Service:* {service}\n"
+        f"⏱ *Time:* {ts} WIB\n"
+        "✅ *Status:* Portal is back online. Automatic scraping has resumed."
+    )
+
+
+def send_portal_outage_alert(
+    service: str,
+    reason: str = "HTTP 500 / Maintenance",
+    timestamp: str | None = None,
+) -> bool:
+    """Send the single latched portal-outage notice through the WhatsApp notifier."""
+
+    if not settings.wa_alert_enabled:
+        logger.debug("WhatsApp alerts disabled; skipping portal outage alert for %s", service)
+        return False
+    message = format_portal_outage_alert(service, reason, timestamp)
+    try:
+        delivered = send_whatsapp_message(message)
+    except Exception as exc:
+        logger.warning("Portal outage alert for %s could not be sent: %s", service, exc)
+        return False
+    if not delivered:
+        logger.warning("Portal outage alert for %s was rejected by the gateway", service)
+        return False
+    logger.info("Sent portal outage alert for %s", service)
+    return True
+
+
+def send_portal_resolved_alert(
+    service: str,
+    timestamp: str | None = None,
+) -> bool:
+    """Send the portal-resolved notice through the WhatsApp notifier."""
+
+    if not settings.wa_alert_enabled:
+        logger.debug("WhatsApp alerts disabled; skipping portal resolved alert for %s", service)
+        return False
+    message = format_portal_resolved_alert(service, timestamp)
+    try:
+        delivered = send_whatsapp_message(message)
+    except Exception as exc:
+        logger.warning("Portal resolved alert for %s could not be sent: %s", service, exc)
+        return False
+    if not delivered:
+        logger.warning("Portal resolved alert for %s was rejected by the gateway", service)
+        return False
+    logger.info("Sent portal resolved alert for %s", service)
+    return True
+
+
 __all__ = [
     "ALERT_FAILURE_THRESHOLD",
     "ALERT_STATE_FILENAME",
@@ -427,4 +504,6 @@ __all__ = [
     "orbit_identifier",
     "sanitize_reason",
     "send_scrape_failure_alert",
+    "send_portal_outage_alert",
+    "send_portal_resolved_alert",
 ]

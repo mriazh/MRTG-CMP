@@ -33,6 +33,8 @@ from ..scrape_alerts import (
     AlertSender,
     FailureStreakTracker,
     netcare_failures,
+    send_portal_outage_alert,
+    send_portal_resolved_alert,
     send_scrape_failure_alert,
 )
 from .captcha import GeminiCaptchaSolver
@@ -48,7 +50,7 @@ from .scraper import (
     format_date_range,
     normalize_day_key,
 )
-from .session import NetcareSession
+from .session import NetcareSession, TelkomCarePortalUnavailableError
 from .targets import (
     DEFAULT_TARGETS,
     NetcareTarget,
@@ -92,6 +94,11 @@ SID_DATE_INPUT_XPATH = (
 
 #: Path the portal redirects to once the session is no longer valid.
 LOGIN_PATH = "/public/login"
+
+#: Message logged when the pre-flight check confirms the TelkomCare portal is down.
+PORTAL_DOWN_MESSAGE = (
+    "TelkomCare portal is unavailable (HTTP 500/maintenance); aborting scrape round early"
+)
 
 #: Seconds the page needs to settle after a modal alert is dismissed. The portal
 #: paints its next frame asynchronously, so interacting immediately after
@@ -697,6 +704,7 @@ class NetcareDaemon:
         self._streaks = streaks or FailureStreakTracker(
             service.cache.cache_dir / ALERT_STATE_FILENAME
         )
+        self._portal_outage_alerted: bool = False
 
     def install_signal_handlers(self, stop_event: threading.Event) -> None:
         """Ask the loop to stop on SIGINT/SIGTERM (best effort on non-POSIX)."""
@@ -716,7 +724,18 @@ class NetcareDaemon:
                 completed += 1
                 ok = sum(1 for o in outcomes if o.status == "ok")
                 logger.info("Netcare round complete: %s/%s targets captured", ok, len(outcomes))
-                self._alert_on_failures(outcomes)
+                if not outcomes:
+                    # The round was aborted early because the portal is down. Send a
+                    # single latched portal notice and skip per-target failure streaks
+                    # so the WhatsApp group is not spammed with 18 link failures.
+                    if not self._portal_outage_alerted:
+                        send_portal_outage_alert(SERVICE_NETCARE)
+                        self._portal_outage_alerted = True
+                else:
+                    if self._portal_outage_alerted:
+                        send_portal_resolved_alert(SERVICE_NETCARE)
+                        self._portal_outage_alerted = False
+                    self._alert_on_failures(outcomes)
             except Exception as exc:
                 logger.error("Netcare round failed: %s", exc)
                 completed += 1
@@ -1363,6 +1382,23 @@ def build_daemon_from_settings(config: Settings | None = None) -> NetcareDaemon:
     )
 
     def run_round() -> list[ScrapeOutcome]:
+        # Pre-flight: verify the portal is reachable on the lead worker before
+        # fanning out to every target. A down portal aborts the round immediately
+        # instead of timing out 25s on each of the 18 targets (FR-60.1).
+        try:
+            lead_session = pool.get(0)
+        except TelkomCarePortalUnavailableError:
+            logger.warning(PORTAL_DOWN_MESSAGE)
+            return []
+        is_logged_in = getattr(lead_session, "is_logged_in", None)
+        logged_in = is_logged_in() if callable(is_logged_in) else True
+        portal_down = getattr(lead_session, "portal_unavailable", False) or "500" in getattr(
+            lead_session, "last_error", ""
+        )
+        if not logged_in and not lead_session.login() and portal_down:
+            logger.warning(PORTAL_DOWN_MESSAGE)
+            return []
+
         now = datetime.now()
         start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
         round_window = (start_of_day, now)

@@ -40,6 +40,10 @@ OTP_INPUT_SELECTOR = "input[name='otp[]']"
 OTP_INPUT_COUNT = 6
 LOGIN_REJECT_FRAGMENT = "/public/login/msg/"
 
+class TelkomCarePortalUnavailableError(RuntimeError):
+    """The TelkomCare portal itself is returning HTTP 500, maintenance, or is unreachable."""
+
+
 #: Seconds the login form gets to appear after a navigation. The portal paints it
 #: asynchronously, so a raw ``find_element`` on a cold profile raises while the
 #: page is still rendering.
@@ -154,6 +158,13 @@ def _login_field_wait(driver: Any) -> tuple[Any, Any]:
     return ec, WebDriverWait(driver, LOGIN_FIELD_TIMEOUT_SECONDS)
 
 
+def _portal_down_marker(text: str) -> bool:
+    """Return True when the page body or title signals an HTTP 500 / maintenance."""
+
+    lowered = (text or "").lower()
+    return "sorry, we have a problem" in lowered or "500" in lowered
+
+
 class NetcareSession:
     """Manage the persistent TelkomCare browser session."""
 
@@ -188,6 +199,9 @@ class NetcareSession:
         self.login_attempts = max(1, login_attempts)
         self.captcha_solver = captcha_solver
         self.otp_filler = otp_filler
+        self.portal_unavailable: bool = False
+        self.last_portal_error: str | None = None
+        self.last_error: str | None = None
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -346,6 +360,20 @@ class NetcareSession:
             try:
                 if self._run_login_attempt(on_stage=on_stage):
                     return self._finalize_login()
+            except TelkomCarePortalUnavailableError as exc:
+                # A down portal is deterministic across retries: record it once and
+                # let the caller (the daemon's pre-flight check) surface it rather
+                # than burning every attempt on a portal that will not recover.
+                self.portal_unavailable = True
+                self.last_portal_error = "portal_unavailable"
+                self.last_error = str(exc)
+                logger.warning(
+                    "TelkomCare portal unavailable on attempt %s/%s: %s",
+                    attempt,
+                    self.login_attempts,
+                    exc,
+                )
+                raise
             except Exception as exc:
                 logger.warning(
                     "Auto-login attempt %s/%s failed: %s",
@@ -365,11 +393,52 @@ class NetcareSession:
             return False
 
         driver.get(self.base_url)
-        ec, wait = _login_field_wait(driver)
-        # The form is rendered client-side, so both fields are waited for rather
-        # than assumed present the moment the navigation returns.
-        username_input = wait.until(ec.presence_of_element_located(("css selector", "#uname")))
-        password_input = wait.until(ec.presence_of_element_located(("css selector", "#passw")))
+
+        # Portal outage detection: an HTTP 500 / maintenance page renders no login
+        # form at all, so bail out immediately instead of waiting for inputs that
+        # will never appear and burning every retry on a down portal.
+        try:
+            body = driver.page_source
+        except Exception:  # pragma: no cover - a dead driver cannot be probed
+            body = ""
+        title = ""
+        try:
+            title = str(getattr(driver, "title", "") or "")
+        except Exception:  # pragma: no cover - defensive
+            title = ""
+        if (
+            _portal_down_marker(body) or _portal_down_marker(title)
+        ) and len(driver.find_elements("css selector", "input")) == 0:
+            self.portal_unavailable = True
+            self.last_portal_error = "portal_unavailable"
+            self.last_error = "TelkomCare portal returned HTTP 500 / maintenance page"
+            raise TelkomCarePortalUnavailableError(self.last_error)
+
+        try:
+            ec, wait = _login_field_wait(driver)
+            # The form is rendered client-side, so both fields are waited for rather
+            # than assumed present the moment the navigation returns.
+            username_input = wait.until(ec.presence_of_element_located(("css selector", "#uname")))
+            password_input = wait.until(ec.presence_of_element_located(("css selector", "#passw")))
+        except Exception as exc:
+            from selenium.common.exceptions import TimeoutException
+
+            if isinstance(exc, TimeoutException):
+                # A slow render is the common case, but inspect the body so a down
+                # portal is classified correctly rather than treated as a slow render.
+                try:
+                    body = driver.page_source
+                except Exception:  # pragma: no cover - defensive
+                    body = ""
+                if _portal_down_marker(body):
+                    self.portal_unavailable = True
+                    self.last_portal_error = "portal_unavailable"
+                    self.last_error = (
+                        "TelkomCare portal returned HTTP 500 / maintenance page"
+                    )
+                    raise TelkomCarePortalUnavailableError(self.last_error) from exc
+            raise
+
         username_input.clear()
         username_input.send_keys(self.username)
         password_input.clear()
@@ -460,6 +529,7 @@ __all__ = [
     "BrowserLike",
     "NetcareSession",
     "OtpFiller",
+    "TelkomCarePortalUnavailableError",
     "generate_totp_code",
     "is_authenticated_url",
     "load_cookie_file",

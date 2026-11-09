@@ -28,6 +28,8 @@ from mrtg_cmp.scrape_alerts import (
     SERVICE_ORBIT,
     FailureStreakTracker,
     ScrapeFailure,
+    format_portal_outage_alert,
+    format_portal_resolved_alert,
     format_scrape_failure_alert,
     netcare_failures,
     orbit_failures,
@@ -313,6 +315,36 @@ def test_format_alert_truncates_a_very_long_failure_list() -> None:
     assert len(message) < 2000
 
 
+def test_format_portal_outage_alert() -> None:
+    """The portal-outage notice names the service, time, and reason."""
+
+    message = format_portal_outage_alert(
+        SERVICE_NETCARE, reason="HTTP 500", timestamp="2026-10-06 10:00:00"
+    )
+
+    assert "PORTAL NOTICE" in message
+    assert SERVICE_NETCARE in message
+    assert "2026-10-06 10:00:00 WIB" in message
+    assert "HTTP 500" in message
+    assert "Scraper is paused" in message
+
+
+def test_format_portal_outage_alert_uses_default_reason() -> None:
+    message = format_portal_outage_alert(SERVICE_NETCARE)
+    assert "HTTP 500 / Maintenance" in message
+
+
+def test_format_portal_resolved_alert() -> None:
+    """The portal-resolved notice names the service and the recovery time."""
+
+    message = format_portal_resolved_alert(SERVICE_NETCARE, timestamp="2026-10-06 10:05:00")
+
+    assert "PORTAL RESOLVED" in message
+    assert SERVICE_NETCARE in message
+    assert "2026-10-06 10:05:00 WIB" in message
+    assert "back online" in message
+
+
 # --- failure collection ----------------------------------------------------
 
 
@@ -558,7 +590,81 @@ def test_netcare_daemon_sends_no_alert_when_the_round_itself_raises(tmp_path: Pa
     assert alerter.calls == []
 
 
-# --- Orbit daemon seam -----------------------------------------------------
+# --- Portal outage latch -------------------------------------------------------
+
+
+def test_netcare_portal_outage_sends_outage_alert_once_and_latches(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """A round that returns [] (portal down) sends one latched notice, no per-target alerts."""
+
+    sent_outage: list[str] = []
+    sent_resolved: list[str] = []
+
+    def fake_outage(
+        service: str,
+        reason: str = "HTTP 500 / Maintenance",
+        timestamp: str | None = None,
+    ) -> bool:
+        sent_outage.append(reason)
+        return True
+
+    def fake_resolved(service: str, timestamp: str | None = None) -> bool:
+        sent_resolved.append(service)
+        return True
+
+    monkeypatch.setattr("mrtg_cmp.netcare.service.send_portal_outage_alert", fake_outage)
+    monkeypatch.setattr("mrtg_cmp.netcare.service.send_portal_resolved_alert", fake_resolved)
+
+    alerter = RecordingAlerter()
+    daemon = _netcare_daemon(NetcareCache(tmp_path / "cache"), [], alerter)
+
+    assert daemon.run(max_rounds=4) == 4
+
+    # Latched: exactly one outage notice across every down round.
+    assert len(sent_outage) == 1
+    assert sent_resolved == []
+    # No per-target failure streaks or 18 link failure alerts during the outage.
+    assert alerter.calls == []
+
+
+def test_netcare_portal_recovery_sends_resolved_and_clears_latch(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Once a round succeeds again, the resolved notice fires and the latch clears."""
+
+    sent_outage: list[str] = []
+    sent_resolved: list[str] = []
+
+    def fake_outage(
+        service: str,
+        reason: str = "HTTP 500 / Maintenance",
+        timestamp: str | None = None,
+    ) -> bool:
+        sent_outage.append(reason)
+        return True
+
+    def fake_resolved(service: str, timestamp: str | None = None) -> bool:
+        sent_resolved.append(service)
+        return True
+
+    monkeypatch.setattr("mrtg_cmp.netcare.service.send_portal_outage_alert", fake_outage)
+    monkeypatch.setattr("mrtg_cmp.netcare.service.send_portal_resolved_alert", fake_resolved)
+
+    alerter = RecordingAlerter()
+    rounds = [
+        [],
+        [ScrapeOutcome.from_ok("target-001")],
+        [ScrapeOutcome.from_ok("target-001")],
+    ]
+    daemon = _scripted_netcare_daemon(NetcareCache(tmp_path / "cache"), rounds, alerter)
+
+    assert daemon.run(max_rounds=3) == 3
+
+    assert len(sent_outage) == 1
+    assert len(sent_resolved) == 1
+    # The recovered round is a clean success: no per-target alert.
+    assert alerter.calls == []
 
 
 def test_orbit_daemon_stays_silent_on_a_clean_round(tmp_path: Path, monkeypatch: Any) -> None:
